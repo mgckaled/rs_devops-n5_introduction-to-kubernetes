@@ -1,432 +1,360 @@
 <!-- markdownlint-disable -->
 
-# Kubernetes: Orquestrando Containers com Pods, ReplicaSets, Deployments e Services
+# Bloco B - Orquestrando Containers com Pods, ReplicaSets, Deployments e Services
 
-## 1. Resumo Executivo
+## Resumo Executivo
 
-Este documento aborda os conceitos fundamentais e objetos essenciais do Kubernetes para orquestração de containers em produção. O foco está na compreensão teórica e prática de Pods, ReplicaSets, Deployments e Services, elementos que formam a base para execução, replicação, atualização e exposição de aplicações containerizadas. A transição da abordagem imperativa para a declarativa é explorada em profundidade, demonstrando como manifestos YAML permitem gerenciamento consistente, versionável e reproduzível de recursos. O documento também examina os desafios de disponibilidade, redundância e zero-downtime deployment, apresentando soluções arquiteturais que garantem resiliência e continuidade operacional em ambientes de produção.
+A orquestração de containers no Kubernetes fundamenta-se em abstrações hierárquicas que progressivamente adicionam capacidades de gestão, resiliência e automação à execução de cargas de trabalho containerizadas. Este documento explora sistematicamente os recursos fundamentais do Kubernetes utilizados para implantar e gerenciar aplicações, começando pelo Pod como unidade atômica de deployment, avançando através de controladores como ReplicaSet que garantem disponibilidade através de replicação, e culminando em Deployments que adicionam capacidades sofisticadas de gestão de ciclo de vida e versionamento.
 
-## 2. Introdução e Conceitos
+A transição de abordagens imperativas para declarativas constitui tema central na operação efetiva do Kubernetes. Enquanto comandos imperativos permitem experimentação rápida e prototipagem, a gestão declarativa através de manifestos YAML versionados representa a prática recomendada para ambientes de produção, proporcionando reprodutibilidade, rastreabilidade e capacidade de automação através de pipelines de CI/CD. A organização lógica de recursos através de namespaces facilita governança, isolamento e gestão de permissões em clusters compartilhados entre múltiplas equipes ou ambientes.
 
-### 2.1. Hierarquia de Objetos no Kubernetes
+O conceito de efemeridade de Pods - sua natureza descartável e transitória - motiva a necessidade de controladores que garantam disponibilidade contínua através de replicação automática. ReplicaSets implementam esta funcionalidade, mantendo número especificado de réplicas de Pods executando a qualquer momento, recriando automaticamente instâncias que falham. No entanto, ReplicaSets sozinhos mostram-se inadequados para cenários reais de atualização de aplicações, levando à criação de Deployments que orquestram atualizações controladas através de estratégias como rolling updates, proporcionando atualizações sem downtime e capacidade de rollback em caso de problemas.
 
-O Kubernetes organiza recursos em uma hierarquia lógica que facilita o gerenciamento de aplicações containerizadas. Compreender essa hierarquia é fundamental para trabalhar efetivamente com a plataforma.
+A exposição de aplicações containerizadas para comunicação interna ou externa requer abstrações de rede que desacoplem clientes dos Pods efêmeros subjacentes. Services no Kubernetes provêm endpoints estáveis com descoberta automática através de DNS e balanceamento de carga integrado, permitindo que aplicações comuniquem através de nomes simbólicos independentemente de mudanças na topologia dos Pods. O tipo ClusterIP, padrão no Kubernetes, oferece conectividade interna ao cluster, formando a base sobre a qual outros tipos de Services constroem funcionalidades adicionais.
 
-#### Níveis Hierárquicos
+## 1. Introdução e Conceitos
 
-1. **Container**: Menor unidade de execução, encapsula a aplicação e suas dependências
-2. **Pod**: Menor unidade de deployment no Kubernetes, agrupa um ou mais containers
-3. **ReplicaSet**: Controlador que garante número específico de réplicas de Pods
-4. **Deployment**: Controlador de nível superior que gerencia ReplicaSets e suas atualizações
-5. **Service**: Abstração de rede que expõe Pods de forma consistente
+### 1.1. Hierarquia de Abstrações no Kubernetes
 
-### 2.2. Abordagens de Gerenciamento
+O Kubernetes organiza recursos em hierarquia conceitual onde cada nível adiciona capacidades sobre o anterior, formando camadas de abstração que simplificam progressivamente a gestão de aplicações distribuídas. Na base desta hierarquia encontram-se containers individuais, encapsulados em Pods que formam a unidade atômica de deployment. Controllers como ReplicaSets e Deployments constroem sobre Pods, adicionando lógica de replicação, recuperação de falhas e gestão de versões. Services complementam esta arquitetura fornecendo camada de rede que abstrai a localização dinâmica dos Pods.
 
-O Kubernetes suporta duas abordagens principais para gerenciar recursos:
+Esta organização hierárquica reflete princípios de engenharia de software bem estabelecidos, onde abstrações de alto nível escondem complexidade implementacional enquanto expõem interfaces simples e expressivas. Desenvolvedores e operadores interagem primariamente com abstrações de alto nível como Deployments e Services, permitindo que o Kubernetes gerencie automaticamente recursos de nível inferior como Pods e endpoints de rede.
 
-#### Imperativa
+### 1.2. Abordagens Imperativas versus Declarativas
 
-Na abordagem imperativa, comandos diretos são executados para criar, modificar ou deletar recursos:
+A gestão de recursos no Kubernetes pode ser realizada através de duas abordagens fundamentalmente diferentes: imperativa e declarativa. A abordagem imperativa, baseada em comandos diretos através do kubectl, instrui o cluster a executar ações específicas imediatamente. Por exemplo, `kubectl run nginx --image=nginx` cria um Pod executando nginx através de comando único que especifica explicitamente a ação desejada.
 
 ```bash
-# Criar pod imperativ amente
-kubectl run nginx --image=nginx:1.14.2
-
-# Escalar deployment
+# Exemplos de comandos imperativos
+kubectl run nginx --image=nginx:latest
+kubectl expose pod nginx --port=80 --type=ClusterIP
 kubectl scale deployment nginx --replicas=5
-
-# Atualizar imagem
-kubectl set image deployment/nginx nginx=nginx:1.16.0
+kubectl set image deployment/nginx nginx=nginx:1.21
 ```
 
-**Características**:
+A abordagem declarativa, por outro lado, baseia-se em manifestos que descrevem o estado desejado do sistema. Administradores criam arquivos YAML especificando características de recursos, e o Kubernetes trabalha continuamente para garantir que o estado atual convirja ao estado desejado especificado. Esta abordagem fundamental diferencia Kubernetes de ferramentas de automação tradicionais baseadas em scripts imperativos.
 
-- Comandos diretos e imediatos
-- Útil para operações pontuais e debugging
-- Não mantém histórico de mudanças
-- Dificulta rastreabilidade e reprodutibilidade
-- Não recomendado para produção
+```yaml
+# Exemplo de manifesto declarativo
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:latest
+    ports:
+    - containerPort: 80
+```
 
-#### Declarativa
+A abordagem declarativa oferece vantagens significativas para ambientes de produção. Manifestos podem ser versionados em sistemas de controle de versão como Git, proporcionando histórico completo de mudanças, capacidade de revisão através de pull requests, e reversão trivial a configurações anteriores conhecidas. A automação através de pipelines de CI/CD torna-se direta, onde commits em repositórios automaticamente acionam aplicações de manifestos atualizados. A documentação torna-se intrínseca, pois os manifestos servem simultaneamente como especificação e implementação do estado desejado.
 
-Na abordagem declarativa, o estado desejado é especificado em arquivos de configuração (manifestos):
+### 1.3. Namespaces como Mecanismo de Organização
+
+Namespaces fornecem mecanismo de isolamento lógico que permite particionar um cluster Kubernetes em múltiplos clusters virtuais. Cada namespace provê escopo separado para nomes de recursos, permitindo que equipes diferentes utilizem o mesmo cluster sem conflitos de nomenclatura. Resources como Pods, Services e Deployments existem dentro de namespaces específicos, enquanto recursos de cluster como Nodes e PersistentVolumes operam no escopo global do cluster.
 
 ```bash
-# Aplicar configuração declarativa
+# Operações com namespaces
+kubectl get namespaces
+kubectl create namespace development
+kubectl create namespace staging
+kubectl create namespace production
+
+# Listar recursos em namespace específico
+kubectl get pods -n development
+kubectl get all -n production
+
+# Definir namespace padrão para contexto atual
+kubectl config set-context --current --namespace=development
+```
+
+A organização através de namespaces facilita implementação de políticas de governança e segurança. ResourceQuotas podem limitar consumo agregado de recursos por namespace, prevenindo que uma equipe monopolize recursos do cluster. NetworkPolicies podem isolar tráfego de rede entre namespaces, implementando segmentação de rede ao nível de aplicação. Role-Based Access Control (RBAC) utiliza namespaces como unidade de escopo para permissões, permitindo controle granular sobre quem pode acessar ou modificar recursos.
+
+```yaml
+# Manifesto com namespace explícito
+apiVersion: v1
+kind: Pod
+metadata:
+  name: application-pod
+  namespace: production
+  labels:
+    app: application
+    environment: production
+spec:
+  containers:
+  - name: application
+    image: application:v1.0.0
+```
+
+Namespaces padrão criados automaticamente em clusters Kubernetes incluem:
+
+- **default**: Namespace utilizado quando nenhum é especificado explicitamente
+- **kube-system**: Contém recursos criados pelo sistema Kubernetes, como componentes do control plane
+- **kube-public**: Automaticamente legível por todos os usuários, tipicamente usado para recursos que devem ser visíveis publicamente
+- **kube-node-lease**: Contém objetos Lease associados a cada nó, utilizados para detecção de falhas de nós
+
+## 2. Pods: Unidade Fundamental de Deployment
+
+### 2.1. Conceito e Características de Pods
+
+Pods constituem a menor unidade deployável no Kubernetes, representando uma ou mais containers executando em conjunto no mesmo nó e compartilhando recursos de rede e armazenamento. Diferentemente de containers individuais, Pods provêm contexto de execução compartilhado que permite co-localização de containers intimamente acoplados que necessitam comunicar-se frequentemente ou compartilhar volumes de dados.
+
+Cada Pod recebe endereço IP único no cluster, compartilhado por todos os containers dentro do Pod. Containers no mesmo Pod comunicam através de localhost, pois compartilham namespace de rede. Volumes definidos no Pod podem ser montados em múltiplos containers, facilitando compartilhamento de dados. Esta co-localização e compartilhamento de recursos tornam Pods apropriados para padrões de design como sidecar, ambassador e adapter, onde containers auxiliares complementam funcionalidade do container principal.
+
+```yaml
+# Pod básico com container único
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+  labels:
+    app: nginx
+    tier: frontend
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.21
+    ports:
+    - containerPort: 80
+      name: http
+      protocol: TCP
+```
+
+### 2.2. Efemeridade e Ciclo de Vida
+
+Pods são entidades efêmeras por design, significando que podem ser criados, destruídos e substituídos frequentemente durante operação normal do cluster. Esta efemeridade contrasta fundamentalmente com modelos de infraestrutura tradicional onde servidores são tratados como "pets" com identidades persistentes e longevidade esperada. No paradigma Kubernetes, Pods são "cattle" - indistinguíveis, descartáveis e facilmente substituíveis.
+
+O ciclo de vida de um Pod progride através de fases distintas:
+
+- **Pending**: Pod foi aceito pelo cluster mas um ou mais containers não foram criados ou iniciados
+- **Running**: Pod foi vinculado a um nó e todos os containers foram criados, com pelo menos um container executando
+- **Succeeded**: Todos os containers terminaram com sucesso e não serão reiniciados
+- **Failed**: Todos os containers terminaram e pelo menos um terminou com falha
+- **Unknown**: Estado do Pod não pode ser determinado, tipicamente devido a erro de comunicação com o nó
+
+```bash
+# Observar ciclo de vida de um Pod
+kubectl get pod nginx-pod -w
+
+# Ver ReplicaSets gerenciados pelo Deployment
+kubectl get replicaset -l app=nginx
+
+# Ver Pods
+kubectl get pods -l app=nginx
+
+# Atualizar imagem (imperativo)
+kubectl set image deployment/nginx-deployment nginx=nginx:1.22
+
+# Atualizar declarativamente
+# Editar deployment.yaml alterando image
 kubectl apply -f deployment.yaml
 
-# Aplicar múltiplos arquivos
-kubectl apply -f ./manifests/
+# Verificar status do rollout
+kubectl rollout status deployment/nginx-deployment
 
-# Aplicar com namespace específico
-kubectl apply -f deployment.yaml -n production
+# Ver histórico de rollouts
+kubectl rollout history deployment/nginx-deployment
+
+# Ver detalhes de revisão específica
+kubectl rollout history deployment/nginx-deployment --revision=2
+
+# Ver logs de container em Pod
+kubectl logs nginx-pod
+kubectl logs nginx-pod -c nginx --follow
+
+# Executar comando em container
+kubectl exec -it nginx-pod -- /bin/bash
 ```
 
-**Características**:
+A efemeridade dos Pods implica que aplicações não devem depender de identidades específicas de Pods ou assumir que Pods individuais permanecerão disponíveis indefinidamente. Em vez disso, aplicações devem ser projetadas para tolerar falhas de Pods individuais, confiando em controllers para manter disponibilidade através de replicação.
 
-- Estado desejado definido em arquivos YAML ou JSON
-- Versionável via sistemas de controle de versão (Git)
-- Reproduzível e auditável
-- Fonte única da verdade (single source of truth)
-- Recomendado para ambientes de produção
-- Facilita práticas de GitOps
+### 2.3. Especificação de Recursos
 
-### 2.3. Namespaces: Organização e Isolamento
-
-Namespaces fornecem isolamento lógico de recursos dentro de um cluster Kubernetes.
-
-#### Propósito dos Namespaces
-
-- **Organização**: Segregar recursos por ambiente, equipe ou aplicação
-- **Isolamento**: Separar recursos logicamente dentro do cluster
-- **Controle de Acesso**: Aplicar políticas RBAC específicas
-- **Quotas de Recursos**: Limitar consumo de CPU e memória por namespace
-- **Governança**: Facilitar gestão multi-tenant
-
-#### Namespaces Padrão
-
-```bash
-# Listar namespaces
-kubectl get namespaces
-
-# Namespaces do sistema
-# default: namespace padrão para recursos sem namespace especificado
-# kube-system: componentes do sistema Kubernetes
-# kube-public: recursos públicos acessíveis a todos
-# kube-node-lease: objetos de lease para heartbeat de nodes
-```
-
-#### Criação e Uso
-
-Imperativo:
-
-```bash
-# Criar namespace
-kubectl create namespace development
-
-# Listar pods em namespace específico
-kubectl get pods -n development
-```
-
-Declarativo:
-
-```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: development
-  labels:
-    environment: dev
-    team: backend
-```
-
-### 2.4. Gestão de Recursos Computacionais
-
-O Kubernetes permite especificar requisitos e limites de recursos para garantir qualidade de serviço e evitar contenção de recursos.
-
-#### Requests e Limits
-
-**Requests**: Quantidade garantida de recursos
-
-- Usada pelo Scheduler para decidir em qual Node alocar o Pod
-- Garante que o recurso estará disponível para o container
-- Se o Node não tiver recursos suficientes, o Pod não será agendado
-
-**Limits**: Quantidade máxima de recursos
-
-- Define o teto de consumo do container
-- Se excedido, o container pode ser throttled (CPU) ou killed (memória)
-- Protege o Node contra esgotamento de recursos
-
-#### Exemplo de Configuração
-
-```yaml
-resources:
-  requests:
-    memory: "64Mi"
-    cpu: "250m"      # 250 milicores = 0.25 CPU
-  limits:
-    memory: "128Mi"
-    cpu: "500m"      # 500 milicores = 0.5 CPU
-```
-
-#### Unidades de Medida
-
-**CPU**:
-- Expressa em cores ou milicores (m)
-- 1 core = 1000m
-- Exemplos: 100m (0.1 core), 500m (0.5 core), 2 (2 cores)
-
-**Memória**:
-- Expressa em bytes com sufixos
-- Ki, Mi, Gi (base 1024)
-- K, M, G (base 1000)
-- Exemplos: 128Mi, 1Gi, 500M
-
-#### Consequências de Configuração
-
-**Sem requests nem limits**:
-- Pod pode ser agendado em qualquer Node
-- Pode consumir todos os recursos disponíveis
-- Sujeito a eviction se Node ficar sob pressão
-
-**Somente requests**:
-- Scheduler garante recursos mínimos
-- Pode consumir mais se disponível (burst)
-- Risco de afetar outros Pods
-
-**Requests e limits iguais**:
-- Classe QoS: Guaranteed
-- Recursos reservados exclusivamente
-- Menor probabilidade de eviction
-- Recomendado para cargas críticas
-
-**Requests menores que limits**:
-- Classe QoS: Burstable
-- Permite uso elástico de recursos
-- Balanceia garantia e flexibilidade
-
-## 3. Pods: Unidade Fundamental de Deployment
-
-### 3.1. Conceito e Arquitetura
-
-O Pod é a menor unidade computacional que pode ser criada e gerenciada no Kubernetes. Representa um ou mais containers executando juntos no mesmo Node, compartilhando recursos de rede e armazenamento.
-
-#### Características Principais
-
-**Efemeridade**:
-- Pods são descartáveis e substituíveis
-- Não devem manter estado local persistente
-- Podem ser criados e destruídos a qualquer momento
-- IP do Pod pode mudar ao ser recriado
-
-**Colocação**:
-- Todos os containers de um Pod executam no mesmo Node
-- Compartilham o mesmo namespace de rede (localhost)
-- Compartilham volumes definidos no Pod
-- Scheduled como unidade atômica
-
-**Padrões de Uso**:
-
-1. **Um container por Pod** (mais comum):
-   - Pod encapsula um único container
-   - Container executa a aplicação principal
-   - Simplicidade e clareza
-
-2. **Múltiplos containers por Pod**:
-   - Sidecar pattern: container auxiliar (logging, proxy)
-   - Ambassador pattern: proxy para serviços externos
-   - Adapter pattern: normalização de dados/logs
-
-### 3.2. Ciclo de Vida do Pod
-
-#### Fases do Pod
-
-1. **Pending**: Pod aceito mas containers não criados
-2. **Running**: Pod atribuído a Node e ao menos um container executando
-3. **Succeeded**: Todos containers terminaram com sucesso
-4. **Failed**: Todos containers terminaram e ao menos um falhou
-5. **Unknown**: Estado do Pod não pode ser determinado
-
-#### Condições do Pod
-
-- **PodScheduled**: Pod foi agendado para um Node
-- **ContainersReady**: Todos containers do Pod estão prontos
-- **Initialized**: Todos init containers completaram com sucesso
-- **Ready**: Pod pode servir requisições
-
-### 3.3. Manifesto de Pod
-
-#### Estrutura Básica
+A especificação apropriada de requisitos de recursos constitui prática essencial para operação eficiente de clusters Kubernetes. Resource requests indicam quantidade mínima de CPU e memória que um container necessita, utilizados pelo scheduler ao decidir em qual nó posicionar o Pod. Resource limits definem máximos que um container pode consumir, enforçados pela runtime através de cgroups do Linux.
 
 ```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: nginx-pod
-  namespace: development
-  labels:
-    app: nginx
-    tier: frontend
-    version: "1.14"
+  name: resource-constrained-pod
 spec:
   containers:
-  - name: nginx
-    image: nginx:1.14.2
-    ports:
-    - containerPort: 80
-      protocol: TCP
+  - name: application
+    image: application:latest
     resources:
       requests:
-        memory: "64Mi"
-        cpu: "250m"
+        cpu: 250m        # 250 millicores (0.25 cores)
+        memory: 256Mi    # 256 Mebibytes
       limits:
-        memory: "128Mi"
-        cpu: "500m"
+        cpu: 1000m       # 1000 millicores (1 core)
+        memory: 512Mi    # 512 Mebibytes
 ```
 
-#### Componentes do Manifesto
+A unidade `m` para CPU representa millicores, onde 1000m equivale a 1 core completo. Valores de memória utilizam notação binária (Mi, Gi) ou decimal (M, G), onde 1Mi = 1024 * 1024 bytes e 1M = 1000 * 1000 bytes. A escolha entre notações afeta valores exatos mas raramente impacta funcionalidade significativamente.
 
-**apiVersion**: Versão da API do Kubernetes
-- Pods usam `v1` (core API)
+Quando um container excede seu memory limit, é terminado com erro OOMKilled (Out Of Memory Killed). CPU, sendo recurso compressível, é throttled quando limites são excedidos, degradando performance mas não terminando o container. Requests garantem que nós tenham capacidade suficiente, enquanto limits previnem que containers monopolizem recursos e impactem outras cargas de trabalho.
 
-**kind**: Tipo do objeto Kubernetes
-- Especifica que é um Pod
+### 2.4. Criação Imperativa de Pods
 
-**metadata**: Informações sobre o objeto
-- **name**: Identificador único no namespace
-- **namespace**: Namespace onde o Pod será criado
-- **labels**: Pares chave-valor para identificação e seleção
-
-**spec**: Especificação do Pod
-- **containers**: Lista de containers do Pod
-  - **name**: Nome do container
-  - **image**: Imagem Docker a ser utilizada
-  - **ports**: Portas expostas pelo container
-  - **resources**: Requisitos e limites de recursos
-
-### 3.4. Versionamento de Imagens
-
-O versionamento adequado de imagens é crítico para rastreabilidade e rollback.
-
-#### Estratégias de Versionamento
-
-**Tag específica** (recomendado):
-
-```yaml
-image: nginx:1.14.2
-```
-
-- Garante versão exata da imagem
-- Deployment reproduzível
-- Facilita rollback
-- Previne mudanças inesperadas
-
-**Tag latest** (não recomendado para produção):
-
-```yaml
-image: nginx:latest
-```
-
-- Versão não determinística
-- Pode mudar sem controle
-- Dificulta debugging
-- Problemas de reprodutibilidade
-
-**SHA256 digest** (máxima garantia):
-
-```yaml
-image: nginx@sha256:abc123...
-```
-
-- Referência imutável
-- Garante bit-a-bit a mesma imagem
-- Ideal para auditoria e segurança
-
-#### Boas Práticas
-
-1. **Sempre use tags específicas em produção**
-2. **Associe tag ao commit do código**
-   - Exemplo: `myapp:commit-abc123` ou `myapp:v1.2.3`
-3. **Implemente semantic versioning**
-   - MAJOR.MINOR.PATCH (1.2.3)
-4. **Automatize build e tag via CI/CD**
-5. **Mantenha registro de mudanças (changelog)**
-
-### 3.5. Acessando Pods
-
-#### Port Forward
-
-Permite acesso temporário a um Pod para debugging:
+A criação imperativa de Pods através de linha de comando oferece abordagem rápida para experimentação e troubleshooting, embora não seja recomendada para uso em produção devido à falta de reprodutibilidade e rastreabilidade.
 
 ```bash
-# Encaminhar porta local para porta do Pod
-kubectl port-forward pod/nginx-pod 8080:80
+# Criar Pod com imagem específica
+kubectl run nginx --image=nginx:1.21
 
-# Acesso via navegador ou curl
+# Criar Pod com porta exposta
+kubectl run nginx --image=nginx:1.21 --port=80
+
+# Criar Pod com labels
+kubectl run nginx --image=nginx:1.21 --labels="app=nginx,tier=frontend"
+
+# Criar Pod com resource requests e limits
+kubectl run nginx --image=nginx:1.21 \
+  --requests='cpu=100m,memory=128Mi' \
+  --limits='cpu=500m,memory=256Mi'
+
+# Criar Pod e expor via Service simultaneamente
+kubectl run nginx --image=nginx:1.21 --port=80 --expose
+
+# Criar Pod em namespace específico
+kubectl run nginx --image=nginx:1.21 -n development
+
+# Gerar manifesto YAML sem criar recurso
+kubectl run nginx --image=nginx:1.21 --dry-run=client -o yaml > pod.yaml
+```
+
+O uso de `--dry-run=client -o yaml` permite gerar templates de manifestos rapidamente, combinando conveniência de linha de comando com benefícios de gestão declarativa. O manifesto gerado pode ser editado conforme necessário e commitado em repositório de controle de versão.
+
+### 2.5. Port Forwarding e Acesso a Pods
+
+Durante desenvolvimento e troubleshooting, frequentemente é necessário acessar Pods diretamente sem criar Services ou Ingress. O comando `kubectl port-forward` estabelece túnel seguro entre máquina local e Pod específico, permitindo acesso a portas de containers.
+
+```bash
+# Forward porta 8080 local para porta 80 do Pod
+kubectl port-forward nginx-pod 8080:80
+
+# Forward porta aleatória local para porta 80 do Pod
+kubectl port-forward nginx-pod :80
+
+# Forward múltiplas portas
+kubectl port-forward nginx-pod 8080:80 8443:443
+
+# Forward porta em namespace específico
+kubectl port-forward -n production nginx-pod 8080:80
+
+# Forward em background
+kubectl port-forward nginx-pod 8080:80 &
+
+# Acessar aplicação via port forward
 curl http://localhost:8080
 ```
 
-**Características**:
-- Conexão direta entre máquina local e Pod
-- Temporário e não persistente
-- Ideal para debugging e testes
-- Não recomendado para acesso permanente
+Port forwarding destina-se exclusivamente a uso em desenvolvimento e debugging. Para acesso em produção, Services e Ingress Controllers fornecem soluções apropriadas com balanceamento de carga, descoberta de serviços e configurações de rede adequadas.
 
-#### Exec em Pod
+### 2.6. Manifestos Declarativos de Pods
 
-Executar comandos dentro do container:
-
-```bash
-# Shell interativo
-kubectl exec -it nginx-pod -- /bin/bash
-
-# Comando específico
-kubectl exec nginx-pod -- ls -la /usr/share/nginx/html
-
-# Com múltiplos containers
-kubectl exec -it nginx-pod -c nginx -- /bin/bash
-```
-
-#### Logs do Pod
-
-```bash
-# Ver logs
-kubectl logs nginx-pod
-
-# Seguir logs em tempo real
-kubectl logs -f nginx-pod
-
-# Logs de container específico
-kubectl logs nginx-pod -c nginx
-
-# Últimas N linhas
-kubectl logs --tail=100 nginx-pod
-```
-
-### 3.6. Limitações dos Pods Standalone
-
-Pods criados diretamente apresentam problemas significativos:
-
-1. **Sem auto-recuperação**: Pod deletado não é recriado
-2. **Sem replicação**: Impossível ter múltiplas instâncias
-3. **Sem balanceamento**: Tráfego não distribuído
-4. **Sem rolling updates**: Atualizações causam downtime
-5. **Gerenciamento manual**: Escalabilidade limitada
-
-Esses problemas são resolvidos por controladores como ReplicaSets e Deployments.
-
-## 4. ReplicaSets: Garantindo Redundância
-
-### 4.1. Conceito e Propósito
-
-ReplicaSet é um controlador que garante que um número especificado de réplicas de Pods esteja sempre em execução.
-
-#### Função Principal
-
-- Manter número desejado de Pods idênticos
-- Substituir Pods que falham ou são deletados
-- Escalar número de réplicas para cima ou para baixo
-- Garantir redundância e disponibilidade
-
-#### Padrão de Reconciliação
-
-O ReplicaSet opera em loop contínuo:
-
-1. **Observa** o estado atual (quantos Pods estão rodando)
-2. **Compara** com o estado desejado (réplicas especificadas)
-3. **Age** para convergir ao estado desejado
-   - Cria Pods se houver menos que o desejado
-   - Deleta Pods se houver mais que o desejado
-
-### 4.2. Manifesto de ReplicaSet
+A gestão declarativa através de manifestos YAML representa a prática recomendada para ambientes de produção, proporcionando documentação auto-explicativa, versionamento através de Git, e capacidade de revisão e auditoria de mudanças.
 
 ```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-production
+  namespace: production
+  labels:
+    app: nginx
+    environment: production
+    version: v1.21
+  annotations:
+    description: "NGINX web server for production frontend"
+    owner: "platform-team"
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.21
+    ports:
+    - containerPort: 80
+      name: http
+      protocol: TCP
+    - containerPort: 443
+      name: https
+      protocol: TCP
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 256Mi
+    livenessProbe:
+      httpGet:
+        path: /healthz
+        port: 80
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      httpGet:
+        path: /ready
+        port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 3
+    volumeMounts:
+    - name: nginx-config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+    - name: nginx-logs
+      mountPath: /var/log/nginx
+  volumes:
+  - name: nginx-config
+    configMap:
+      name: nginx-configuration
+  - name: nginx-logs
+    emptyDir: {}
+```
+
+```bash
+# Aplicar manifesto
+kubectl apply -f nginx-pod.yaml
+
+# Ver status do Pod
+kubectl get pod nginx-production -n production
+
+# Descrever Pod detalhadamente
+kubectl describe pod nginx-production -n production
+
+# Ver logs
+kubectl logs nginx-production -n production
+
+# Atualizar manifesto e reaplicar
+kubectl apply -f nginx-pod.yaml
+
+# Deletar Pod
+kubectl delete -f nginx-pod.yaml
+# ou
+kubectl delete pod nginx-production -n production
+```
+
+## 3. ReplicaSets: Garantindo Disponibilidade
+
+### 3.1. Motivação e Propósito
+
+A natureza efêmera dos Pods, embora benéfica para flexibilidade e escalabilidade, introduz desafios significativos para disponibilidade de aplicações. Um Pod executando sozinho não oferece proteção contra falhas - se o Pod falha ou o nó que o hospeda torna-se indisponível, a aplicação fica completamente inacessível até intervenção manual. Esta limitação motivou a criação de controllers que garantem disponibilidade através de replicação automática.
+
+ReplicaSets implementam funcionalidade fundamental de manter conjunto estável de Pods réplica executando a qualquer momento. Se um Pod gerenciado por ReplicaSet falha ou é deletado, o ReplicaSet automaticamente cria novo Pod para substituí-lo, garantindo que o número desejado de réplicas seja mantido. Esta recuperação automática constitui fundação da resiliência de aplicações no Kubernetes.
+
+```yaml
+# ReplicaSet básico
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: nginx-replicaset
-  namespace: development
   labels:
     app: nginx
 spec:
@@ -434,211 +362,194 @@ spec:
   selector:
     matchLabels:
       app: nginx
-      tier: frontend
   template:
     metadata:
       labels:
         app: nginx
-        tier: frontend
     spec:
       containers:
       - name: nginx
-        image: nginx:1.14.2
+        image: nginx:1.21
         ports:
         - containerPort: 80
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "250m"
-          limits:
-            memory: "128Mi"
-            cpu: "500m"
 ```
 
-#### Componentes Críticos
+### 3.2. Componentes de um ReplicaSet
 
-**spec.replicas**:
-- Número desejado de Pods
-- ReplicaSet mantém essa quantidade constantemente
+Um ReplicaSet consiste em três componentes principais que trabalham em conjunto para manter o número desejado de réplicas:
 
-**spec.selector**:
-- Define como ReplicaSet identifica Pods gerenciados
-- Usa labels para seleção
-- **matchLabels**: Igualdade exata de labels
-- **matchExpressions**: Seleção baseada em expressões
+#### 3.2.1. Replicas
 
-**spec.template**:
-- Template usado para criar novos Pods
-- Contém mesma estrutura de Pod
-- **metadata.labels**: Devem corresponder ao selector
-- **spec**: Especificação completa do Pod
+O campo `replicas` especifica o número de Pods idênticos que devem estar executando. O ReplicaSet controller observa continuamente o estado atual e cria ou deleta Pods conforme necessário para alcançar este número desejado.
 
-### 4.3. Labels e Selectors
+#### 3.2.2. Selector
 
-Labels são pares chave-valor anexados a objetos Kubernetes. Selectors permitem identificar conjuntos de objetos.
-
-#### Importância dos Labels
-
-- Identificação e organização de recursos
-- Seleção para controladores (ReplicaSet, Service)
-- Queries e filtragem
-- Rastreamento de propriedade e propósito
-
-#### Correspondência Obrigatória
+O `selector` define como o ReplicaSet identifica quais Pods gerenciar. ReplicaSets utilizam set-based selectors que oferecem expressividade maior que equality-based selectors dos ReplicationControllers legados. O selector deve corresponder aos labels definidos no template do Pod.
 
 ```yaml
-# Labels no template devem corresponder ao selector
+# Exemplos de selectors
 selector:
   matchLabels:
     app: nginx
     tier: frontend
 
-template:
-  metadata:
-    labels:
-      app: nginx        # Deve corresponder
-      tier: frontend    # Deve corresponder
+# Selector mais complexo com matchExpressions
+selector:
+  matchExpressions:
+  - key: app
+    operator: In
+    values:
+    - nginx
+    - httpd
+  - key: environment
+    operator: NotIn
+    values:
+    - development
 ```
 
-Se os labels não corresponderem, o ReplicaSet não conseguirá gerenciar os Pods criados.
+#### 3.2.3. Template
 
-### 4.4. Comportamento e Auto-Recuperação
+O `template` define especificação completa dos Pods que o ReplicaSet criará. Este template inclui metadata (especialmente labels) e spec dos containers. É essencial que os labels no template correspondam ao selector, caso contrário o ReplicaSet não conseguirá gerenciar os Pods que cria.
 
-#### Criação Automática
+### 3.3. Funcionamento do ReplicaSet Controller
 
-Quando ReplicaSet é criado:
-- Verifica quantos Pods com labels correspondentes existem
-- Cria Pods até atingir número de réplicas desejado
-- Distribui Pods entre Nodes disponíveis (via Scheduler)
+O ReplicaSet controller implementa loop de reconciliação que executa continuamente:
 
-#### Recuperação de Falhas
-
-Quando Pod é deletado ou falha:
-- ReplicaSet detecta divergência do estado desejado
-- Cria automaticamente novo Pod para substituir
-- Novo Pod pode ser criado no mesmo ou diferente Node
-- Processo é automático e contínuo
+1. **Observar**: O controller observa o estado atual através da API do Kubernetes, determinando quantos Pods com labels correspondentes ao selector existem
+2. **Comparar**: Compara o número atual de réplicas com o número desejado especificado
+3. **Agir**: Se necessário, cria novos Pods (quando réplicas atuais < desejadas) ou deleta Pods existentes (quando réplicas atuais > desejadas)
+4. **Repetir**: O ciclo repete continuamente, garantindo convergência ao estado desejado
 
 ```bash
-# Deletar pod gerenciado por ReplicaSet
-kubectl delete pod nginx-replicaset-abc123
-
-# ReplicaSet cria automaticamente novo pod
-# Verificar
-kubectl get pods -w  # Watch mode
-```
-
-### 4.5. Escalabilidade
-
-#### Escala Declarativa
-
-```yaml
-spec:
-  replicas: 5  # Aumentar de 3 para 5
-```
-
-```bash
+# Criar ReplicaSet
 kubectl apply -f replicaset.yaml
+
+# Verificar status
+kubectl get replicaset nginx-replicaset
+kubectl get rs nginx-replicaset
+
+# Ver Pods gerenciados
+kubectl get pods -l app=nginx
+
+# Descrever ReplicaSet
+kubectl describe rs nginx-replicaset
+
+# Simular falha deletando Pod
+kubectl delete pod nginx-replicaset-xxxxx
+
+# Observar ReplicaSet criando novo Pod automaticamente
+kubectl get pods -l app=nginx -w
 ```
 
-#### Escala Imperativa
+### 3.4. Escalabilidade com ReplicaSets
+
+ReplicaSets facilitam escalabilidade horizontal através de ajuste simples do número de réplicas. Este escalamento pode ser realizado tanto de forma declarativa (editando o manifesto) quanto imperativa (através de comandos kubectl).
 
 ```bash
-# Escalar para 5 réplicas
+# Escalar imperativamente
 kubectl scale replicaset nginx-replicaset --replicas=5
 
-# Verificar
-kubectl get replicaset nginx-replicaset
+# Escalar declarativamente
+# Editar manifesto alterando spec.replicas de 3 para 5
+kubectl apply -f replicaset.yaml
+
+# Verificar escalamento
+kubectl get rs nginx-replicaset
+kubectl get pods -l app=nginx
+
+# Escalar para baixo
+kubectl scale replicaset nginx-replicaset --replicas=2
 ```
 
-#### Escala Automática (HPA)
+A escalabilidade imperativa oferece conveniência para ajustes temporários ou experimentação, mas escalabilidade declarativa mantém manifestos sincronizados com estado do cluster, evitando divergência entre configuração documentada e realidade operacional.
 
-Horizontal Pod Autoscaler ajusta réplicas automaticamente baseado em métricas:
+### 3.5. Limitações dos ReplicaSets
+
+Embora ReplicaSets garantam disponibilidade através de replicação, apresentam limitação crítica que os torna inadequados para uso direto em produção: não suportam atualizações controladas de versão de imagens ou mudanças na configuração de Pods.
+
+Quando o template de Pod em um ReplicaSet é alterado (por exemplo, atualizando a versão da imagem), o ReplicaSet não atualiza Pods existentes automaticamente. Pods antigos continuam executando indefinidamente, e apenas novos Pods criados após a mudança utilizarão o template atualizado. Para forçar atualização, seria necessário deletar todos os Pods existentes, causando downtime completo da aplicação.
+
+```yaml
+# ReplicaSet original com nginx:1.20
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: nginx-replicaset
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.20  # Versão antiga
+
+---
+# Tentativa de atualizar para nginx:1.21
+# Esta mudança NÃO afeta Pods existentes
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: nginx-replicaset
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21  # Versão nova
+```
 
 ```bash
-kubectl autoscale replicaset nginx-replicaset --min=3 --max=10 --cpu-percent=80
+# Aplicar manifesto atualizado
+kubectl apply -f replicaset.yaml
+
+# Pods existentes mantêm versão antiga
+kubectl get pods -l app=nginx -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[0].image}{"\n"}{end}'
+
+# Para forçar atualização, necessário deletar Pods manualmente
+kubectl delete pods -l app=nginx
+
+# Novos Pods criados usarão nova imagem
+# Mas isso causa downtime durante recriação
 ```
 
-### 4.6. Limitações do ReplicaSet
+Esta limitação fundamental motivou a criação de Deployments, que gerenciam ReplicaSets automaticamente e implementam estratégias sofisticadas de atualização como rolling updates.
 
-Apesar de resolver problemas de redundância, ReplicaSets apresentam limitações críticas:
+## 4. Deployments: Gestão de Ciclo de Vida
 
-#### Problema de Atualização de Versão
+### 4.1. Conceito e Vantagens
 
-Ao atualizar a imagem do container:
+Deployments constituem abstração de nível superior que gerencia ReplicaSets e fornece capacidades declarativas para atualização de Pods e ReplicaSets. Enquanto ReplicaSets focam exclusivamente em manter número desejado de réplicas, Deployments adicionam funcionalidade crítica para gestão de ciclo de vida de aplicações em produção.
+
+As capacidades chave que Deployments adicionam incluem:
+
+- **Rolling updates**: Atualizações graduais que substituem Pods antigos por novos de forma controlada, mantendo disponibilidade
+- **Rollback**: Reversão automática ou manual a versões anteriores em caso de problemas
+- **Histórico de revisões**: Manutenção de histórico de ReplicaSets anteriores, permitindo rollback a qualquer versão
+- **Pausa e retomada**: Capacidade de pausar rollouts para fazer múltiplas alterações antes de aplicá-las
+- **Status de progresso**: Informações detalhadas sobre progresso de rollouts e condições de erro
+
+Deployments provêm atualizações declarativas para Pods e ReplicaSets, permitindo descrever um estado desejado e o Deployment Controller alterar o estado atual para o estado desejado a uma taxa controlada.
 
 ```yaml
-# Versão antiga
-template:
-  spec:
-    containers:
-    - name: nginx
-      image: nginx:1.14.2
-
-# Tentativa de atualização
-template:
-  spec:
-    containers:
-    - name: nginx
-      image: nginx:1.16.0  # Nova versão
-```
-
-**Comportamento**:
-- ReplicaSet **não** atualiza Pods existentes
-- Novos Pods criados usarão nova imagem
-- Pods existentes continuam com imagem antiga
-- Necessário deletar manualmente Pods antigos
-
-#### Processo Manual de Atualização
-
-1. Aplicar manifesto com nova imagem
-2. Deletar ReplicaSet com `--cascade=orphan` (mantém Pods)
-3. Criar novo ReplicaSet
-4. Deletar Pods antigos gradualmente
-
-**Problemas**:
-- Processo manual e propenso a erros
-- Causa downtime
-- Sem controle de rollout
-- Sem histórico de versões
-- Sem rollback automático
-
-Esses problemas são resolvidos pelo Deployment.
-
-## 5. Deployments: Gerenciamento de Atualizações
-
-### 5.1. Conceito e Arquitetura
-
-Deployment é um controlador de nível superior que gerencia ReplicaSets e fornece capacidades declarativas de atualização.
-
-#### Hierarquia
-
-```text
-Deployment
-  └─> ReplicaSet (versão nova)
-        └─> Pod
-        └─> Pod
-        └─> Pod
-  └─> ReplicaSet (versão antiga) - escalado para 0
-        └─> (sem pods)
-```
-
-#### Responsabilidades
-
-1. **Gerenciar ReplicaSets**: Cria e controla ReplicaSets
-2. **Rolling Updates**: Atualiza Pods gradualmente
-3. **Rollback**: Reverte para versões anteriores
-4. **Histórico de Revisões**: Mantém registro de mudanças
-5. **Declarativo**: Estado desejado em manifesto
-
-### 5.2. Manifesto de Deployment
-
-```yaml
+# Deployment completo
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nginx-deployment
-  namespace: development
+  namespace: production
   labels:
     app: nginx
 spec:
@@ -653,362 +564,356 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: nginx:1.14.2
+        image: nginx:1.21
         ports:
         - containerPort: 80
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            cpu: 100m
+            memory: 128Mi
           limits:
-            memory: "128Mi"
-            cpu: "500m"
+            cpu: 500m
+            memory: 256Mi
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1
-      maxUnavailable: 1
+      maxUnavailable: 0
 ```
 
-#### Diferenças em Relação ao ReplicaSet
+### 4.2. Estrutura de um Deployment
 
-- **apiVersion**: `apps/v1`
-- **kind**: `Deployment` ao invés de `ReplicaSet`
-- **spec.strategy**: Define estratégia de atualização (novo campo)
-- Demais campos idênticos ao ReplicaSet
+A estrutura de um Deployment é muito similar à de um ReplicaSet, com adição de campos relacionados a estratégias de atualização. A seção `template` em um Deployment é idêntica ao template de Pod em ReplicaSet, e a lógica de seleção funciona da mesma forma.
 
-### 5.3. Estratégias de Atualização
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: application-deployment
+  labels:
+    app: application
+    version: v1.0
+spec:
+  # Número desejado de réplicas
+  replicas: 5
+  
+  # Selector que identifica Pods gerenciados
+  selector:
+    matchLabels:
+      app: application
+  
+  # Template de Pod
+  template:
+    metadata:
+      labels:
+        app: application
+        version: v1.0
+    spec:
+      containers:
+      - name: application
+        image: myapp:1.0.0
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+  
+  # Estratégia de atualização
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  
+  # Tempo mínimo para considerar Pod ready
+  minReadySeconds: 10
+  
+  # Tempo máximo para rollout antes de considerar falho
+  progressDeadlineSeconds: 600
+  
+  # Número de ReplicaSets antigos a manter
+  revisionHistoryLimit: 10
+```
 
-#### RollingUpdate (Padrão)
+### 4.3. Estratégias de Atualização
 
-Atualização gradual que mantém disponibilidade:
+Deployments suportam duas estratégias principais de atualização, especificadas no campo `strategy.type`:
+
+#### 4.3.1. RollingUpdate
+
+A estratégia RollingUpdate (padrão) atualiza Pods gradualmente, garantindo que aplicação permaneça disponível durante o processo. Novos Pods são criados com configuração atualizada enquanto Pods antigos são terminados de forma controlada.
 
 ```yaml
 strategy:
   type: RollingUpdate
   rollingUpdate:
-    maxSurge: 1           # Pods extras permitidos durante update
-    maxUnavailable: 1     # Pods indisponíveis tolerados
+    # Número máximo de Pods além de replicas durante update
+    maxSurge: 1
+    
+    # Número máximo de Pods indisponíveis durante update
+    maxUnavailable: 0
 ```
 
-**maxSurge**:
-- Número ou percentual de Pods extras durante update
-- Valor absoluto (ex: 1, 2) ou percentual (ex: 25%, 50%)
-- Permite criar Pods novos antes de deletar antigos
-- Default: 25%
+- **maxSurge**: Especifica quantos Pods adicionais além de `replicas` podem existir temporariamente durante rollout. Pode ser número absoluto ou percentual. Valor maior acelera rollout mas consome mais recursos temporariamente.
 
-**maxUnavailable**:
-- Número ou percentual de Pods que podem estar indisponíveis
-- Valor absoluto ou percentual
-- Controla quantos Pods antigos deletar por vez
-- Default: 25%
+- **maxUnavailable**: Especifica quantos Pods podem estar indisponíveis durante rollout. Valor 0 garante zero downtime mas requer recursos suficientes para executar Pods extras (maxSurge > 0).
 
-**Exemplo de Rollout**:
+Exemplo de rollout com `replicas: 3`, `maxSurge: 1`, `maxUnavailable: 1`:
 
-Estado inicial: 3 réplicas rodando v1.14.2
+1. Estado inicial: 3 Pods antigos executando
+2. Criar 1 novo Pod (maxSurge permite 4 Pods totais temporariamente)
+3. Aguardar novo Pod ficar ready
+4. Terminar 1 Pod antigo (maxUnavailable permite 1 Pod indisponível)
+5. Repetir até todos os 3 Pods serem novos
 
-```text
-maxSurge=1, maxUnavailable=1, replicas=3
+#### 4.3.2. Recreate
 
-Passo 1: Cria 1 novo Pod (v1.16.0)
-  [v1.14.2] [v1.14.2] [v1.14.2] [v1.16.0]  <- 4 pods (surge)
-
-Passo 2: Deleta 1 Pod antigo
-  [v1.14.2] [v1.14.2] [v1.16.0]  <- 3 pods
-
-Passo 3: Cria 1 novo Pod
-  [v1.14.2] [v1.14.2] [v1.16.0] [v1.16.0]  <- 4 pods
-
-Passo 4: Deleta 1 Pod antigo
-  [v1.14.2] [v1.16.0] [v1.16.0]  <- 3 pods
-
-Passo 5: Cria 1 novo Pod
-  [v1.14.2] [v1.16.0] [v1.16.0] [v1.16.0]  <- 4 pods
-
-Passo 6: Deleta último Pod antigo
-  [v1.16.0] [v1.16.0] [v1.16.0]  <- 3 pods (completo)
-```
-
-**Vantagens**:
-- Zero downtime deployment
-- Transição gradual e controlada
-- Permite rollback durante processo
-- Mantém disponibilidade
-
-#### Recreate
-
-Deleta todos Pods antigos antes de criar novos:
+A estratégia Recreate termina todos os Pods antigos antes de criar novos, resultando em downtime completo mas garantindo que versões antigas e novas nunca executem simultaneamente.
 
 ```yaml
 strategy:
   type: Recreate
 ```
 
-**Comportamento**:
-1. Escala ReplicaSet antigo para 0 (deleta todos Pods)
-2. Espera todos Pods terminarem
-3. Cria ReplicaSet novo
-4. Escala para número de réplicas desejado
+Esta estratégia é apropriada para aplicações que não suportam múltiplas versões executando simultaneamente, como bancos de dados que requerem migrações de schema incompatíveis entre versões.
 
-**Características**:
-- Causa downtime
-- Todos Pods são da mesma versão simultaneamente
-- Mais simples e rápido
-- Útil quando aplicações não suportam múltiplas versões simultâneas
+### 4.4. Operações com Deployments
 
-### 5.4. Processo de Atualização
-
-#### Atualização Declarativa
-
-1. Modificar manifesto (ex: mudar imagem)
-
-```yaml
-containers:
-- name: nginx
-  image: nginx:1.16.0  # Atualizado de 1.14.2
-```
-
-2. Aplicar mudança
+#### 4.4.1. Criação e Atualização
 
 ```bash
+# Criar Deployment
 kubectl apply -f deployment.yaml
+
+# Verificar status
+kubectl get deployment nginx-deployment
+kubectl get deploy nginx-deployment
 ```
 
-3. Deployment automaticamente:
-   - Cria novo ReplicaSet com nova versão
-   - Escala novo ReplicaSet gradualmente
-   - Escala ReplicaSet antigo para baixo
-   - Mantém ReplicaSet antigo (com 0 réplicas) para rollback
+#### 4.4.2. Rollback
 
-#### Atualização Imperativa
+A capacidade de reverter a versões anteriores constitui funcionalidade crítica para ambientes de produção, permitindo recuperação rápida de atualizações problemáticas.
 
 ```bash
-# Atualizar imagem
-kubectl set image deployment/nginx-deployment nginx=nginx:1.16.0
-
-# Editar deployment diretamente
-kubectl edit deployment nginx-deployment
-```
-
-#### Monitoramento do Rollout
-
-```bash
-# Status do rollout
-kubectl rollout status deployment/nginx-deployment
-
-# Histórico de revisões
-kubectl rollout history deployment/nginx-deployment
-
-# Detalhes de revisão específica
-kubectl rollout history deployment/nginx-deployment --revision=2
-```
-
-### 5.5. Rollback
-
-Reverter para versão anterior:
-
-```bash
-# Rollback para revisão anterior
+# Fazer rollback para versão anterior
 kubectl rollout undo deployment/nginx-deployment
 
-# Rollback para revisão específica
+# Fazer rollback para revisão específica
 kubectl rollout undo deployment/nginx-deployment --to-revision=2
 
-# Pausar rollout em andamento
-kubectl rollout pause deployment/nginx-deployment
+# Verificar status após rollback
+kubectl rollout status deployment/nginx-deployment
 
-# Retomar rollout pausado
-kubectl rollout resume deployment/nginx-deployment
-```
-
-#### Histórico de Revisões
-
-```bash
+# Verificar histórico atualizado
 kubectl rollout history deployment/nginx-deployment
 ```
 
-Output:
-```text
-REVISION  CHANGE-CAUSE
-1         <none>
-2         kubectl apply -f deployment.yaml
-3         kubectl set image deployment/nginx-deployment nginx=nginx:1.16.0
+#### 4.4.3. Pausa e Retomada
+
+Pausar um Deployment permite fazer múltiplas alterações antes de acionar novo rollout, útil quando mudanças relacionadas devem ser aplicadas atomicamente.
+
+```bash
+# Pausar Deployment
+kubectl rollout pause deployment/nginx-deployment
+
+# Fazer múltiplas alterações
+kubectl set image deployment/nginx-deployment nginx=nginx:1.22
+kubectl set resources deployment/nginx-deployment -c=nginx --limits=cpu=500m,memory=512Mi
+
+# Retomar rollout
+kubectl rollout resume deployment/nginx-deployment
+
+# Verificar status
+kubectl rollout status deployment/nginx-deployment
 ```
 
-**revisionHistoryLimit**:
-- Número de ReplicaSets antigos mantidos
-- Default: 10
-- Configurável em `spec.revisionHistoryLimit`
+#### 4.4.4. Escalabilidade
 
-### 5.6. Controle de Disponibilidade
+```bash
+# Escalar imperativo
+kubectl scale deployment nginx-deployment --replicas=10
 
-#### minReadySeconds
+# Escalar declarativo
+# Editar deployment.yaml alterando spec.replicas
+kubectl apply -f deployment.yaml
 
-Tempo mínimo que Pod deve estar Ready antes de ser considerado disponível:
+# Verificar escalamento
+kubectl get deployment nginx-deployment
+kubectl get pods -l app=nginx
+```
+
+### 4.5. Relação entre Deployment, ReplicaSet e Pods
+
+Deployments criam e gerenciam ReplicaSets automaticamente. Cada vez que o template de Pod em um Deployment é alterado, um novo ReplicaSet é criado. O Deployment então escala gradualmente o novo ReplicaSet para cima enquanto escala o antigo para baixo, implementando rolling update.
+
+```bash
+# Observar relação hierárquica
+kubectl get deployment nginx-deployment
+kubectl get replicaset -l app=nginx
+kubectl get pods -l app=nginx
+
+# Ver owner references (quem criou cada recurso)
+kubectl get pods -l app=nginx -o yaml | grep -A 5 ownerReferences
+```
+
+Cada ReplicaSet mantido no histórico pode ser usado para rollback. O campo `revisionHistoryLimit` controla quantos ReplicaSets antigos são mantidos (padrão 10).
 
 ```yaml
 spec:
-  minReadySeconds: 30
+  revisionHistoryLimit: 10  # Manter 10 revisões antigas
 ```
 
-- Previne rollout muito rápido
-- Permite detecção de problemas em startup
-- Útil com health checks
+### 4.6. Boas Práticas com Deployments
 
-#### progressDeadlineSeconds
+#### 4.6.1. Versionamento de Imagens
 
-Tempo máximo para progresso do rollout:
+Utilizar tags específicas de versão ao invés de `latest` constitui prática essencial. Tags como `latest` ou `stable` mudam ao longo do tempo, tornando impossível determinar qual versão específica está executando ou reverter a versão anterior.
 
 ```yaml
-spec:
-  progressDeadlineSeconds: 600  # 10 minutos
+# Evitar
+containers:
+- name: application
+  image: myapp:latest
+
+# Preferir
+containers:
+- name: application
+  image: myapp:v1.2.3  # Tag específica, idealmente commit hash
 ```
 
-- Se rollout não progride nesse tempo, marca como failed
-- Permite detecção de rollouts travados
-- Default: 600 segundos
+#### 4.6.2. Health Checks
 
-## 6. Services: Expondo Aplicações
-
-### 6.1. Conceito e Necessidade
-
-Services fornecem abstração de rede estável para acessar Pods dinâmicos.
-
-#### Problema Resolvido
-
-Pods são efêmeros:
-- IPs mudam quando Pods são recriados
-- Número de Pods varia com escalabilidade
-- Difícil saber qual Pod acessar
-- Necessário balanceamento de carga
-
-Service resolve:
-- IP e DNS estáveis
-- Descoberta automática de Pods
-- Balanceamento de carga
-- Abstração de endpoints dinâmicos
-
-### 6.2. Funcionamento
-
-Service usa labels para selecionar Pods:
+Definir liveness e readiness probes apropriadas garante que Deployments considerem Pods ready apenas quando realmente capazes de processar tráfego, e reiniciem automaticamente Pods em estados problemáticos.
 
 ```yaml
-# Service
-selector:
-  app: nginx
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
 
-# Pods matching
-labels:
-  app: nginx
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 3
 ```
 
-Kubernetes automaticamente:
-1. Identifica Pods com labels correspondentes
-2. Adiciona IPs dos Pods como endpoints do Service
-3. Atualiza endpoints quando Pods são criados/deletados
-4. Distribui tráfego entre endpoints saudáveis
+#### 4.6.3. Resource Requests e Limits
 
-### 6.3. Tipos de Services
+Especificar requests e limits apropriados previne que containers monopolizem recursos e permite scheduler tomar decisões informadas de placement.
 
-#### ClusterIP (Padrão)
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+```
 
-Expõe Service em IP interno do cluster:
+#### 4.6.4. Configuração de Rolling Update
+
+Ajustar `maxSurge` e `maxUnavailable` conforme requisitos específicos de disponibilidade e capacidade:
+
+```yaml
+# Zero downtime, requer recursos extras
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# Rollout mais rápido, aceita indisponibilidade temporária
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 2
+    maxUnavailable: 1
+```
+
+## 5. Services: Abstraindo Acesso a Pods
+
+### 5.1. Necessidade de Services
+
+Pods são efêmeros e podem ser criados, destruídos e substituídos frequentemente. Cada Pod recebe endereço IP único, mas este IP muda toda vez que o Pod é recriado. Adicionalmente, Deployments criam e gerenciam múltiplas réplicas de Pods, cada uma com seu próprio IP. Aplicações cliente necessitam forma estável de comunicar com estas aplicações backend sem rastrear manualmente IPs individuais de Pods.
+
+Services resolvem este problema fornecendo abstração estável sobre conjunto dinâmico de Pods. Um Service recebe endereço IP virtual estável (ClusterIP) e nome DNS que permanecem constantes independentemente de mudanças nos Pods backend. O kube-proxy em cada nó mantém regras de rede que encaminham tráfego destinado ao Service para Pods backend apropriados, implementando balanceamento de carga automático.
+
+### 5.2. Tipos de Services
+
+Kubernetes suporta quatro tipos principais de Services, cada um apropriado para diferentes cenários de exposição:
+
+#### 5.2.1. ClusterIP
+
+ClusterIP (padrão) expõe o Service em IP interno ao cluster. O Service torna-se acessível apenas de dentro do cluster, apropriado para comunicação entre microsserviços.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-service
-  namespace: development
+  name: backend-service
 spec:
   type: ClusterIP
   selector:
-    app: nginx
+    app: backend
   ports:
   - protocol: TCP
     port: 80          # Porta do Service
-    targetPort: 80    # Porta do container
+    targetPort: 8080  # Porta do container
 ```
 
-**Características**:
-- Acessível apenas dentro do cluster
-- IP virtual estável (ClusterIP)
-- DNS interno: `<service-name>.<namespace>.svc.cluster.local`
-- Balanceamento de carga automático
-- Uso: comunicação entre serviços internos
+#### 5.2.2. NodePort
 
-#### NodePort
-
-Expõe Service em porta de todos os Nodes:
+NodePort expõe o Service na mesma porta em todos os nós do cluster. Clientes externos podem acessar o Service através de `<NodeIP>:<NodePort>`.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-nodeport
+  name: frontend-service
 spec:
   type: NodePort
   selector:
-    app: nginx
+    app: frontend
   ports:
   - protocol: TCP
     port: 80
-    targetPort: 80
-    nodePort: 30080   # Porta nos Nodes (30000-32767)
+    targetPort: 8080
+    nodePort: 30080  # Porta nos nós (30000-32767)
 ```
 
-**Características**:
-- Acessível externamente via `<NodeIP>:<NodePort>`
-- Porta alocada em todos Nodes
-- Range: 30000-32767 (configurável)
-- Kubernetes roteia tráfego para Pods
-- Uso: desenvolvimento, testes, acesso externo simples
+#### 5.2.3. LoadBalancer
 
-**Exemplo de acesso**:
-```bash
-curl http://192.168.1.10:30080  # IP de qualquer Node
-```
-
-#### LoadBalancer
-
-Provisiona load balancer externo (requer provedor cloud):
+LoadBalancer provê o Service através de load balancer de provedor cloud, criando automaticamente NodePort e ClusterIP subjacentes.
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-loadbalancer
+  name: web-service
 spec:
   type: LoadBalancer
   selector:
-    app: nginx
+    app: web
   ports:
   - protocol: TCP
     port: 80
-    targetPort: 80
+    targetPort: 8080
 ```
 
-**Características**:
-- Cria load balancer no provedor de nuvem (AWS ELB, GCP LB, Azure LB)
-- IP externo público
-- Distribui tráfego entre Nodes
-- Nodes distribuem para Pods
-- Uso: produção, exposição pública de serviços
+#### 5.2.4. ExternalName
 
-**Exemplo em AWS**:
-```bash
-kubectl get service nginx-loadbalancer
-```
-
-Output:
-```text
-NAME                  TYPE           EXTERNAL-IP
-nginx-loadbalancer    LoadBalancer   abc-123.us-east-1.elb.amazonaws.com
-```
-
-#### ExternalName
-
-Mapeia Service para nome DNS externo:
+ExternalName mapeia o Service a nome DNS externo, útil para referenciar serviços externos ao cluster através de DNS interno.
 
 ```yaml
 apiVersion: v1
@@ -1017,540 +922,549 @@ metadata:
   name: external-database
 spec:
   type: ExternalName
-  externalName: db.example.com
+  externalName: database.external.com
 ```
 
-**Características**:
-- Não tem selector
-- Retorna CNAME para nome externo
-- Útil para integração com serviços externos
-- Facilita migração e abstração
+### 5.3. Seletores e Endpoints
 
-### 6.4. Manifesto Completo de Service
+Services utilizam label selectors para determinar quais Pods devem receber tráfego. Quando um Service é criado, o Endpoints Controller automaticamente cria objeto Endpoints contendo IPs de todos os Pods que correspondem ao selector.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: application-service
+spec:
+  selector:
+    app: application
+    tier: backend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+```
+
+```bash
+# Ver Service
+kubectl get service application-service
+
+# Ver Endpoints associados
+kubectl get endpoints application-service
+
+# Descrever Service mostra Endpoints
+kubectl describe service application-service
+```
+
+O objeto Endpoints é atualizado automaticamente quando Pods são criados ou destruídos, garantindo que o Service sempre encaminhe tráfego apenas para Pods ready.
+
+### 5.4. Descoberta de Serviços via DNS
+
+Kubernetes executa servidor DNS interno (tipicamente CoreDNS) que automaticamente cria registros DNS para Services. Pods são configurados automaticamente para utilizar este DNS, permitindo descoberta de serviços através de nomes.
+
+Formato dos nomes DNS:
+- `<service-name>.<namespace>.svc.cluster.local` (nome completo)
+- `<service-name>.<namespace>` (pode omitir domínio cluster)
+- `<service-name>` (para Services no mesmo namespace)
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: client-pod
+spec:
+  containers:
+  - name: client
+    image: busybox
+    command: ['sh', '-c', 'while true; do wget -O- http://backend-service.production; sleep 5; done']
+```
+
+```bash
+# Testar resolução DNS de dentro do cluster
+kubectl run test-pod --image=busybox -it --rm -- nslookup backend-service.production
+
+# Testar conectividade
+kubectl run test-pod --image=busybox -it --rm -- wget -O- http://backend-service.production
+```
+
+### 5.5. Criação de Services
+
+#### 5.5.1. Criação Declarativa
 
 ```yaml
 apiVersion: v1
 kind: Service
 metadata:
   name: nginx-service
-  namespace: development
+  namespace: production
   labels:
     app: nginx
 spec:
   type: ClusterIP
   selector:
     app: nginx
-    tier: frontend
   ports:
   - name: http
     protocol: TCP
     port: 80
     targetPort: 80
-  sessionAffinity: None
+  - name: https
+    protocol: TCP
+    port: 443
+    targetPort: 443
+  sessionAffinity: ClientIP  # Opcional: afinidade de sessão
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
 ```
-
-#### Campos Importantes
-
-**spec.selector**:
-- Labels para selecionar Pods
-- Service roteia tráfego apenas para Pods matching
-
-**spec.ports**:
-- **port**: Porta exposta pelo Service
-- **targetPort**: Porta do container (pode ser nome ou número)
-- **protocol**: TCP ou UDP
-- **name**: Nome da porta (útil com múltiplas portas)
-
-**spec.sessionAffinity**:
-- `None` (default): Sem afinidade, balanceamento round-robin
-- `ClientIP`: Requisições do mesmo cliente vão para mesmo Pod
-
-### 6.5. Endpoints
-
-Endpoints são objetos que mapeiam Service para Pods:
 
 ```bash
-# Listar endpoints
-kubectl get endpoints nginx-service
+# Aplicar manifesto
+kubectl apply -f service.yaml
 
-# Detalhes
-kubectl describe endpoints nginx-service
+# Verificar Service
+kubectl get service nginx-service -n production
+
+# Ver detalhes
+kubectl describe service nginx-service -n production
+
+# Testar Service de dentro do cluster
+kubectl run test --image=busybox -it --rm -n production -- wget -O- http://nginx-service
 ```
 
-Output:
-```text
-NAME            ENDPOINTS
-nginx-service   10.244.1.5:80,10.244.2.3:80,10.244.3.7:80
-```
-
-Cada endpoint representa um Pod:
-- IP do Pod
-- Porta do container
-- Atualizado automaticamente
-
-### 6.6. Descoberta de Serviços
-
-#### DNS
-
-Kubernetes fornece DNS interno:
+#### 5.5.2. Criação Imperativa
 
 ```bash
-# Formato: <service>.<namespace>.svc.cluster.local
-nginx-service.development.svc.cluster.local
+# Expor Deployment
+kubectl expose deployment nginx-deployment --port=80 --target-port=80 --type=ClusterIP
 
-# Dentro do mesmo namespace
-nginx-service
+# Expor Pod
+kubectl expose pod nginx-pod --port=80 --target-port=80
 
-# Resolução
-nslookup nginx-service.development.svc.cluster.local
+# Criar Service com NodePort
+kubectl expose deployment nginx-deployment --port=80 --target-port=80 --type=NodePort
+
+# Gerar manifesto sem criar
+kubectl expose deployment nginx-deployment --port=80 --type=ClusterIP --dry-run=client -o yaml > service.yaml
 ```
 
-#### Variáveis de Ambiente
+### 5.6. Relação entre Services e Deployments
 
-Kubernetes injeta variáveis em Pods:
-
-```bash
-NGINX_SERVICE_SERVICE_HOST=10.96.0.10
-NGINX_SERVICE_SERVICE_PORT=80
-```
-
-**Limitação**: Apenas para Services criados antes do Pod
-
-### 6.7. Relação Service-Deployment
-
-#### Separação de Responsabilidades
-
-- **Deployment**: Gerencia execução e atualizações de Pods
-- **Service**: Expõe Pods com endpoint estável
-
-#### Relação Um-para-Um Típica
+Services e Deployments são independentes mas complementares. Um Deployment gerencia Pods enquanto um Service fornece acesso estável a estes Pods. Tipicamente existe relação um-para-um entre Services e Deployments em arquiteturas simples, mas cenários mais complexos podem envolver múltiplos Services apontando para o mesmo conjunto de Pods (diferenciando por portas) ou um Service balanceando entre Pods de múltiplos Deployments.
 
 ```yaml
 # Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: web-application
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: nginx
+      app: web
+      tier: frontend
   template:
     metadata:
       labels:
-        app: nginx    # Label usado pelo Service
+        app: web
+        tier: frontend
     spec:
       containers:
-      - name: nginx
-        image: nginx:1.14.2
+      - name: web
+        image: nginx:1.21
+        ports:
+        - containerPort: 80
+
 ---
-# Service
+# Service correspondente
 apiVersion: v1
 kind: Service
 metadata:
-  name: nginx-service
+  name: web-service
 spec:
   selector:
-    app: nginx        # Seleciona Pods do Deployment
+    app: web
+    tier: frontend
   ports:
-  - port: 80
+  - protocol: TCP
+    port: 80
     targetPort: 80
 ```
 
-#### Labels Conectam Deployment e Service
+A chave para conectar Services e Pods são os labels. O selector do Service deve corresponder aos labels dos Pods criados pelo Deployment.
 
-- Deployment define labels nos Pods
-- Service usa selector com mesmos labels
-- Mudanças nos Pods são refletidas automaticamente no Service
-- Service permanece estável durante atualizações
+### 5.7. Gestão Declarativa versus Imperativa
 
-## 7. Ciclo Completo de Deployment
-
-### 7.1. Fluxo de Criação
-
-1. **Aplicar Deployment**:
+A gestão declarativa através de manifestos YAML versionados representa prática recomendada para Services em produção, assim como para outros recursos. Manifestos servem como documentação, podem ser revisados através de pull requests, e mantêm histórico completo de mudanças.
 
 ```bash
-kubectl apply -f deployment.yaml -n development
-```
+# Fluxo declarativo completo
 
-2. **Deployment Controller**:
-   - Cria ReplicaSet com hash da versão
-   - Define número de réplicas
+# 1. Criar diretório de manifestos
+mkdir -p k8s/production
 
-3. **ReplicaSet Controller**:
-   - Cria Pods conforme template
-   - Adiciona labels e owner references
-
-4. **Scheduler**:
-   - Atribui Pods a Nodes
-   - Considera recursos, afinidades, taints
-
-5. **Kubelet**:
-   - Detecta Pods atribuídos ao seu Node
-   - Instrui Container Runtime
-   - Puxa imagens
-   - Inicia containers
-
-6. **Aplicar Service**:
-
-```bash
-kubectl apply -f service.yaml -n development
-```
-
-7. **Service Controller**:
-   - Cria Service com ClusterIP
-   - Identifica Pods via selector
-   - Cria Endpoints
-
-8. **Kube-proxy**:
-   - Configura regras iptables ou IPVS
-   - Habilita balanceamento de carga
-
-### 7.2. Fluxo de Atualização
-
-1. **Modificar Deployment** (ex: nova imagem)
-
-```yaml
-containers:
-- name: nginx
-  image: nginx:1.16.0  # Mudança
-```
-
-2. **Aplicar mudança**:
-
-```bash
-kubectl apply -f deployment.yaml
-```
-
-3. **Deployment Controller**:
-   - Detecta mudança no template
-   - Cria novo ReplicaSet com novo hash
-   - Inicia rollout strategy
-
-4. **Rolling Update** (se maxSurge=1, maxUnavailable=1):
-   - Escala novo ReplicaSet: 0 → 1
-   - Espera Pod Ready
-   - Escala ReplicaSet antigo: 3 → 2
-   - Repete até completar
-
-5. **Service**:
-   - Endpoints atualizados automaticamente
-   - Novos Pods adicionados
-   - Pods antigos removidos
-   - Sem interrupção de serviço
-
-6. **Rollout completo**:
-   - ReplicaSet novo: 3 réplicas
-   - ReplicaSet antigo: 0 réplicas (mantido para rollback)
-
-### 7.3. Verificação e Troubleshooting
-
-```bash
-# Status do Deployment
-kubectl get deployment nginx-deployment
-
-# Detalhes
-kubectl describe deployment nginx-deployment
-
-# ReplicaSets
-kubectl get replicaset
-
-# Pods
-kubectl get pods -l app=nginx
-
-# Service e Endpoints
-kubectl get service nginx-service
-kubectl get endpoints nginx-service
-
-# Eventos
-kubectl get events --sort-by='.lastTimestamp'
-
-# Logs
-kubectl logs -l app=nginx --tail=100
-
-# Rollout status
-kubectl rollout status deployment/nginx-deployment
-```
-
-## 8. Conclusões
-
-### Principais Aprendizados
-
-1. **Hierarquia de Objetos**:
-   - Pods são unidades fundamentais mas efêmeras
-   - ReplicaSets garantem redundância mas não gerenciam atualizações
-   - Deployments fornecem gerenciamento completo de ciclo de vida
-   - Services abstraem acesso a Pods dinâmicos
-
-2. **Abordagem Declarativa**:
-   - Manifestos YAML definem estado desejado
-   - Versionamento via Git
-   - Reprodutibilidade e auditoria
-   - Fonte única da verdade
-
-3. **Gestão de Recursos**:
-   - Requests garantem recursos mínimos
-   - Limits protegem contra consumo excessivo
-   - QoS classes determinam prioridade de eviction
-   - Essencial para estabilidade do cluster
-
-4. **Disponibilidade e Resiliência**:
-   - ReplicaSets garantem número de réplicas
-   - Rolling updates permitem zero-downtime
-   - Rollback automático em caso de falha
-   - Self-healing automático
-
-5. **Abstração de Rede**:
-   - Services fornecem endpoints estáveis
-   - Descoberta automática via DNS
-   - Balanceamento de carga nativo
-   - Separação de responsabilidades (compute vs network)
-
-### Melhores Práticas
-
-1. **Sempre use controladores** (Deployment/ReplicaSet), nunca Pods standalone
-2. **Adote abordagem declarativa** com manifestos versionados
-3. **Especifique requests e limits** para todos containers
-4. **Use tags específicas de imagens**, não latest
-5. **Configure health checks** (liveness, readiness probes)
-6. **Organize com namespaces** por ambiente ou equipe
-7. **Use labels consistentes** para identificação
-8. **Mantenha histórico de rollout** com annotations
-9. **Teste rollouts em staging** antes de produção
-10. **Monitore métricas e logs** continuamente
-
-### Próximos Passos
-
-Os conceitos apresentados formam a base para tópicos avançados:
-
-- **ConfigMaps e Secrets**: Gerenciamento de configuração
-- **Volumes e Persistent Storage**: Dados persistentes
-- **Health Checks**: Liveness e Readiness Probes
-- **Ingress**: Exposição HTTP/HTTPS avançada
-- **Network Policies**: Segurança de rede
-- **RBAC**: Controle de acesso baseado em funções
-- **Helm**: Gerenciamento de pacotes Kubernetes
-- **Operators**: Automação customizada
-
-### Recomendações Finais
-
-Para equipes implementando Kubernetes:
-
-1. **Comece simples**: Deploy básico com Deployment e Service
-2. **Incremente gradualmente**: Adicione complexidade conforme necessário
-3. **Automatize tudo**: CI/CD, testes, monitoramento
-4. **Documente manifestos**: Comentários e READMEs explicativos
-5. **Estabeleça governança**: Padrões, reviews, políticas
-6. **Capacite equipe**: Treinamento contínuo é essencial
-
-## 9. Referências Bibliográficas
-
-### Documentação Oficial
-
-- Kubernetes Documentation. "Pods". Disponível em: https://kubernetes.io/docs/concepts/workloads/pods/. Acesso em: 2024.
-
-- Kubernetes Documentation. "ReplicaSet". Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Deployments". Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Service". Disponível em: https://kubernetes.io/docs/concepts/services-networking/service/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Namespaces". Disponível em: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Labels and Selectors". Disponível em: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Managing Resources". Disponível em: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/. Acesso em: 2024.
-
-### API Reference
-
-- Kubernetes API Reference. "Pod v1 core". Disponível em: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/. Acesso em: 2024.
-
-- Kubernetes API Reference. "ReplicaSet v1 apps". Disponível em: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/replica-set-v1/. Acesso em: 2024.
-
-- Kubernetes API Reference. "Deployment v1 apps". Disponível em: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/deployment-v1/. Acesso em: 2024.
-
-- Kubernetes API Reference. "Service v1 core". Disponível em: https://kubernetes.io/docs/reference/kubernetes-api/service-resources/service-v1/. Acesso em: 2024.
-
-### Livros e Publicações
-
-- Burns, Brendan; Beda, Joe; Hightower, Kelsey. "Kubernetes: Up and Running". O'Reilly Media, 2019.
-
-- Luksa, Marko. "Kubernetes in Action". Manning Publications, 2018.
-
-- Hightower, Kelsey; Burns, Brendan; Beda, Joe. "Kubernetes Best Practices". O'Reilly Media, 2019.
-
-### Artigos Técnicos
-
-- Kubernetes Blog. "Kubernetes Deployment Strategies". Disponível em: https://kubernetes.io/blog/. Acesso em: 2024.
-
-## 10. Apêndice
-
-### Apêndice A: Comandos kubectl para Workloads
-
-#### Pods
-
-```bash
-# Listar pods
-kubectl get pods
-kubectl get pods -n development
-kubectl get pods --all-namespaces
-kubectl get pods -o wide
-
-# Detalhes do pod
-kubectl describe pod nginx-pod
-
-# Logs
-kubectl logs nginx-pod
-kubectl logs -f nginx-pod
-kubectl logs nginx-pod -c nginx
-kubectl logs --tail=100 nginx-pod
-
-# Exec
-kubectl exec nginx-pod -- ls
-kubectl exec -it nginx-pod -- /bin/bash
-
-# Port forward
-kubectl port-forward nginx-pod 8080:80
-
-# Deletar
-kubectl delete pod nginx-pod
-```
-
-#### ReplicaSets
-
-```bash
-# Listar
-kubectl get replicaset
-kubectl get rs
-
-# Detalhes
-kubectl describe replicaset nginx-replicaset
-
-# Escalar
-kubectl scale replicaset nginx-replicaset --replicas=5
-
-# Deletar (deleta pods também)
-kubectl delete replicaset nginx-replicaset
-
-# Deletar (mantém pods)
-kubectl delete replicaset nginx-replicaset --cascade=orphan
-```
-
-#### Deployments
-
-```bash
-# Listar
-kubectl get deployment
-kubectl get deploy
-
-# Detalhes
-kubectl describe deployment nginx-deployment
-
-# Criar
-kubectl apply -f deployment.yaml
-
-# Atualizar imagem
-kubectl set image deployment/nginx-deployment nginx=nginx:1.16.0
-
-# Escalar
-kubectl scale deployment nginx-deployment --replicas=5
-
-# Autoscale
-kubectl autoscale deployment nginx-deployment --min=3 --max=10 --cpu-percent=80
-
-# Rollout status
-kubectl rollout status deployment/nginx-deployment
-
-# Rollout history
-kubectl rollout history deployment/nginx-deployment
-
-# Rollback
-kubectl rollout undo deployment/nginx-deployment
-
-# Rollback para revisão específica
-kubectl rollout undo deployment/nginx-deployment --to-revision=2
-
-# Pausar rollout
-kubectl rollout pause deployment/nginx-deployment
-
-# Retomar rollout
-kubectl rollout resume deployment/nginx-deployment
-
-# Deletar
-kubectl delete deployment nginx-deployment
-```
-
-#### Services
-
-```bash
-# Listar
-kubectl get service
-kubectl get svc
-
-# Detalhes
-kubectl describe service nginx-service
-
-# Endpoints
-kubectl get endpoints nginx-service
-
-# Criar
-kubectl apply -f service.yaml
-
-# Expor deployment (imperativo)
-kubectl expose deployment nginx-deployment --port=80 --type=ClusterIP
-
-# Deletar
-kubectl delete service nginx-service
-```
-
-### Apêndice B: Exemplos de Manifestos Completos
-
-#### Deployment com Health Checks
-
-```yaml
+# 2. Criar manifestos
+cat > k8s/production/deployment.yaml <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx-deployment
+  name: application
   namespace: production
-  labels:
-    app: nginx
-    version: "1.16"
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: nginx
+      app: application
   template:
     metadata:
       labels:
-        app: nginx
-        version: "1.16"
+        app: application
     spec:
       containers:
-      - name: nginx
-        image: nginx:1.16.0
+      - name: application
+        image: myapp:v1.0.0
+        ports:
+        - containerPort: 8080
+EOF
+
+cat > k8s/production/service.yaml <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: application-service
+  namespace: production
+spec:
+  selector:
+    app: application
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+EOF
+
+# 3. Aplicar todos os manifestos
+kubectl apply -f k8s/production/
+
+# 4. Verificar recursos criados
+kubectl get all -n production
+
+# 5. Fazer alterações nos manifestos
+vim k8s/production/deployment.yaml  # Alterar replicas ou image
+
+# 6. Reaplicar
+kubectl apply -f k8s/production/
+
+# 7. Verificar mudanças
+kubectl rollout status deployment/application -n production
+```
+
+### 5.8. Debugging e Troubleshooting de Services
+
+```bash
+# Verificar se Service existe
+kubectl get service application-service
+
+# Ver Endpoints do Service
+kubectl get endpoints application-service
+kubectl describe endpoints application-service
+
+# Se Endpoints estiver vazio, verificar:
+# 1. Pods existem com labels corretos?
+kubectl get pods --show-labels
+
+# 2. Labels dos Pods correspondem ao selector do Service?
+kubectl get service application-service -o jsonpath='{.spec.selector}'
+
+# 3. Pods estão ready?
+kubectl get pods
+
+# Testar conectividade de dentro do cluster
+kubectl run debug-pod --image=busybox -it --rm -- wget -O- http://application-service
+
+# Ver logs do kube-proxy para troubleshooting de rede
+kubectl logs -n kube-system -l k8s-app=kube-proxy
+
+# Verificar regras iptables (se usando modo iptables)
+kubectl get pods -n kube-system -l k8s-app=kube-proxy
+kubectl exec -n kube-system kube-proxy-xxxxx -- iptables-save | grep application-service
+```
+
+## 6. Organizando Recursos com Namespaces
+
+### 6.1. Propósito e Casos de Uso
+
+Namespaces fornecem mecanismo para dividir recursos de cluster entre múltiplos usuários, equipes ou ambientes. Cada namespace provê escopo isolado para nomes, permitindo que recursos com mesmo nome existam em namespaces diferentes.
+
+Casos de uso comuns incluem:
+
+- **Separação de ambientes**: development, staging, production em mesmo cluster
+- **Isolamento de equipes**: cada equipe opera em namespace próprio
+- **Multi-tenancy**: múltiplos clientes compartilhando cluster
+- **Separação de projetos**: diferentes projetos ou aplicações
+
+```bash
+# Listar namespaces
+kubectl get namespaces
+kubectl get ns
+
+# Criar namespace
+kubectl create namespace development
+kubectl create namespace staging
+kubectl create namespace production
+
+# Deletar namespace (deleta todos os recursos)
+kubectl delete namespace development
+```
+
+### 6.2. Criação Declarativa de Namespaces
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    environment: production
+    team: platform
+  annotations:
+    description: "Production environment for all services"
+```
+
+```bash
+# Aplicar manifesto
+kubectl apply -f namespace.yaml
+
+# Verificar namespace criado
+kubectl get namespace production
+kubectl describe namespace production
+```
+
+### 6.3. Resource Quotas e Limit Ranges
+
+Namespaces permitem aplicação de políticas de governança através de ResourceQuotas e LimitRanges.
+
+#### 6.3.1. ResourceQuota
+
+ResourceQuotas limitam consumo agregado de recursos em namespace.
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-quota
+  namespace: production
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    persistentvolumeclaims: "10"
+    pods: "50"
+```
+
+#### 6.3.2. LimitRange
+
+LimitRanges definem limites padrão e máximos para containers individuais.
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: production-limitrange
+  namespace: production
+spec:
+  limits:
+  - max:
+      cpu: "2"
+      memory: 4Gi
+    min:
+      cpu: 100m
+      memory: 128Mi
+    default:
+      cpu: 500m
+      memory: 512Mi
+    defaultRequest:
+      cpu: 200m
+      memory: 256Mi
+    type: Container
+```
+
+### 6.4. Trabalhando com Namespaces
+
+```bash
+# Criar recursos em namespace específico
+kubectl apply -f deployment.yaml -n production
+
+# Definir namespace padrão para contexto
+kubectl config set-context --current --namespace=production
+
+# Verificar namespace padrão
+kubectl config view --minify | grep namespace:
+
+# Listar recursos em namespace
+kubectl get all -n production
+kubectl get pods -n production
+kubectl get services -n production
+
+# Listar recursos em todos os namespaces
+kubectl get pods --all-namespaces
+kubectl get pods -A
+
+# Deletar recurso em namespace
+kubectl delete pod nginx-pod -n production
+
+# Deletar todos os recursos em namespace (mantém namespace)
+kubectl delete all --all -n production
+```
+
+### 6.5. Comunicação Entre Namespaces
+
+Services em um namespace são acessíveis de outros namespaces através de nome DNS completo.
+
+```yaml
+# Service no namespace "backend"
+apiVersion: v1
+kind: Service
+metadata:
+  name: database-service
+  namespace: backend
+spec:
+  selector:
+    app: database
+  ports:
+  - port: 5432
+
+---
+# Pod no namespace "frontend" acessando Service
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-pod
+  namespace: frontend
+spec:
+  containers:
+  - name: web
+    image: webapp:latest
+    env:
+    - name: DATABASE_URL
+      value: "postgresql://database-service.backend.svc.cluster.local:5432/appdb"
+```
+
+NetworkPolicies podem restringir comunicação entre namespaces quando necessário para segurança.
+
+## 6. Conclusões
+
+A orquestração efetiva de containers no Kubernetes requer compreensão profunda das abstrações hierárquicas que a plataforma oferece, desde Pods como unidade fundamental até Deployments como mecanismo sofisticado de gestão de ciclo de vida. Cada nível de abstração adiciona capacidades específicas que endereçam desafios operacionais distintos, formando sistema coeso que facilita gestão de aplicações distribuídas complexas.
+
+A evolução de Pods simples através de ReplicaSets até Deployments demonstra como o Kubernetes progressivamente adiciona funcionalidades de resiliência, disponibilidade e gestão de versões. Pods fornecem encapsulamento básico e co-localização de containers, ReplicaSets garantem disponibilidade através de replicação automática, e Deployments completam a stack com capacidades essenciais de rolling updates e rollbacks. Esta organização em camadas permite que desenvolvedores utilizem abstrações apropriadas ao nível de controle necessário, desde Pods diretos para casos especiais até Deployments para aplicações stateless típicas.
+
+Services complementam esta arquitetura fornecendo camada de rede que abstrai a natureza efêmera dos Pods, oferecendo endpoints estáveis com descoberta automática através de DNS e balanceamento de carga integrado. A separação clara entre gestão de ciclo de vida (Deployments) e exposição de rede (Services) exemplifica princípios de design do Kubernetes baseados em composição de componentes especializados. Esta separação facilita evolução independente de aspectos diferentes da arquitetura e permite reutilização de Services entre múltiplos backends.
+
+A transição de abordagens imperativas para declarativas representa mudança fundamental de paradigma que, embora inicialmente possa parecer mais complexa, oferece benefícios substanciais para operações em escala. Manifestos YAML versionados em sistemas de controle de versão fornecem documentação executável, histórico completo de mudanças, capacidade de revisão colaborativa, e fundação para automação através de pipelines de CI/CD. A gestão declarativa transforma infraestrutura em código, aplicando ao domínio operacional as mesmas práticas de engenharia que há décadas beneficiam desenvolvimento de software.
+
+Namespaces completam o modelo organizacional do Kubernetes, permitindo isolamento lógico e aplicação de políticas de governança em clusters compartilhados. A capacidade de particionar clusters em ambientes virtuais distintos, cada um com suas próprias quotas de recursos e políticas de acesso, democratiza acesso a infraestrutura Kubernetes enquanto mantém controles necessários para operação segura e eficiente. Este modelo multi-tenant reduz custos operacionais através de consolidação enquanto preserva isolamento adequado entre cargas de trabalho.
+
+## 7. Referências Bibliográficas
+
+### 7.1. Documentação Oficial do Kubernetes
+
+- Kubernetes Documentation. "Pods". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/workloads/pods/
+
+- Kubernetes Documentation. "ReplicaSet". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
+
+- Kubernetes Documentation. "Deployments". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+
+- Kubernetes Documentation. "Services". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/services-networking/service/
+
+- Kubernetes Documentation. "Namespaces". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+
+### 7.2. Conceitos de Workloads
+
+- Kubernetes Documentation. "Workload Resources". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/workloads/
+
+- Kubernetes Documentation. "Managing Resources". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+
+- Kubernetes Documentation. "Configure Liveness, Readiness and Startup Probes". Kubernetes.io. Disponível em: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+
+### 7.3. Rede e Services
+
+- Kubernetes Documentation. "Service Networking". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/services-networking/
+
+- Kubernetes Documentation. "DNS for Services and Pods". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/
+
+- Kubernetes Documentation. "Connecting Applications with Services". Kubernetes.io. Disponível em: https://kubernetes.io/docs/tutorials/services/connect-applications-service/
+
+### 7.4. Governança e Organização
+
+- Kubernetes Documentation. "Resource Quotas". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/policy/resource-quotas/
+
+- Kubernetes Documentation. "Limit Ranges". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/policy/limit-range/
+
+- Kubernetes Documentation. "Configure Default Memory Requests and Limits for a Namespace". Kubernetes.io. Disponível em: https://kubernetes.io/docs/tasks/administer-cluster/manage-resources/memory-default-namespace/
+
+### 7.5. Best Practices
+
+- Kubernetes Documentation. "Configuration Best Practices". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/configuration/overview/
+
+- Kubernetes Documentation. "Running in Production". Kubernetes.io. Disponível em: https://kubernetes.io/docs/setup/best-practices/
+
+## 8. Apêndices
+
+### Apêndice A: Estrutura de Manifesto Completo
+
+```yaml
+# namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    environment: production
+
+---
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-application
+  namespace: production
+  labels:
+    app: web
+    version: v1.0
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        version: v1.0
+    spec:
+      containers:
+      - name: web
+        image: nginx:1.21
         ports:
         - containerPort: 80
-          protocol: TCP
+          name: http
         resources:
           requests:
-            memory: "64Mi"
-            cpu: "250m"
+            cpu: 100m
+            memory: 128Mi
           limits:
-            memory: "128Mi"
-            cpu: "500m"
+            cpu: 500m
+            memory: 256Mi
         livenessProbe:
           httpGet:
-            path: /
+            path: /healthz
             port: 80
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           httpGet:
-            path: /
+            path: /ready
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 5
@@ -1559,247 +1473,229 @@ spec:
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
-  minReadySeconds: 10
-  revisionHistoryLimit: 10
-```
 
-#### Service com Múltiplas Portas
-
-```yaml
+---
+# service.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: multi-port-service
+  name: web-service
   namespace: production
+  labels:
+    app: web
 spec:
   type: ClusterIP
   selector:
-    app: myapp
+    app: web
   ports:
-  - name: http
-    protocol: TCP
+  - protocol: TCP
     port: 80
-    targetPort: 8080
-  - name: https
-    protocol: TCP
-    port: 443
-    targetPort: 8443
-  - name: metrics
-    protocol: TCP
-    port: 9090
-    targetPort: 9090
+    targetPort: 80
+    name: http
 ```
 
-#### Namespace com ResourceQuota
+### Apêndice B: Comandos kubectl Essenciais para Workloads
+
+```bash
+# Pods
+kubectl get pods
+kubectl get pods -o wide
+kubectl get pods --show-labels
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
+kubectl logs <pod-name> -f
+kubectl logs <pod-name> --previous
+kubectl exec -it <pod-name> -- /bin/bash
+kubectl delete pod <pod-name>
+
+# Deployments
+kubectl get deployments
+kubectl get deploy
+kubectl describe deployment <deployment-name>
+kubectl rollout status deployment/<deployment-name>
+kubectl rollout history deployment/<deployment-name>
+kubectl rollout undo deployment/<deployment-name>
+kubectl scale deployment <deployment-name> --replicas=5
+kubectl set image deployment/<deployment-name> <container>=<image>
+kubectl delete deployment <deployment-name>
+
+# ReplicaSets
+kubectl get replicasets
+kubectl get rs
+kubectl describe rs <replicaset-name>
+kubectl scale rs <replicaset-name> --replicas=3
+kubectl delete rs <replicaset-name>
+
+# Services
+kubectl get services
+kubectl get svc
+kubectl describe service <service-name>
+kubectl get endpoints <service-name>
+kubectl delete service <service-name>
+
+# Namespaces
+kubectl get namespaces
+kubectl get ns
+kubectl create namespace <name>
+kubectl delete namespace <name>
+kubectl config set-context --current --namespace=<name>
+
+# Troubleshooting
+kubectl get events
+kubectl get events --sort-by='.lastTimestamp'
+kubectl top nodes
+kubectl top pods
+kubectl port-forward <pod-name> 8080:80
+```
+
+### Apêndice C: Padrões de Labels Recomendados
 
 ```yaml
-apiVersion: v1
-kind: Namespace
 metadata:
-  name: development
   labels:
-    environment: dev
----
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: dev-quota
-  namespace: development
-spec:
-  hard:
-    requests.cpu: "10"
-    requests.memory: 20Gi
-    limits.cpu: "20"
-    limits.memory: 40Gi
-    pods: "50"
+    # Labels recomendadas pela Kubernetes
+    app.kubernetes.io/name: myapp
+    app.kubernetes.io/instance: myapp-prod
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: ecommerce-platform
+    app.kubernetes.io/managed-by: kubectl
+    
+    # Labels personalizadas
+    environment: production
+    team: platform
+    cost-center: engineering
 ```
-
-### Apêndice C: Estratégias de Rolling Update
-
-#### Conservadora (Alta Disponibilidade)
-
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 1
-    maxUnavailable: 0
-```
-
-- Sempre mantém todas réplicas disponíveis
-- Rollout mais lento
-- Requer recursos extras temporariamente
-- Ideal para serviços críticos
-
-#### Balanceada
-
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 25%
-    maxUnavailable: 25%
-```
-
-- Valores default
-- Balanceia velocidade e disponibilidade
-- Adequado para maioria dos casos
-
-#### Agressiva (Rápida)
-
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 100%
-    maxUnavailable: 50%
-```
-
-- Rollout rápido
-- Aceita maior indisponibilidade
-- Usa mais recursos temporariamente
-- Adequado para ambientes de teste
 
 ### Apêndice D: Troubleshooting Comum
 
-#### Pod não inicia (ImagePullBackOff)
+#### D.1. Pods em CrashLoopBackOff
 
 ```bash
-# Verificar
-kubectl describe pod nginx-pod
+# Ver logs do container
+kubectl logs <pod-name>
+kubectl logs <pod-name> --previous
 
-# Possíveis causas
-# - Nome de imagem incorreto
-# - Tag não existe
-# - Registry requer autenticação
-# - Sem acesso à internet
+# Descrever pod
+kubectl describe pod <pod-name>
 
-# Solução
-# - Verificar nome e tag da imagem
-# - Configurar ImagePullSecrets se necessário
+# Verificar eventos
+kubectl get events --field-selector involvedObject.name=<pod-name>
+
+# Verificar resource limits
+kubectl get pod <pod-name> -o jsonpath='{.spec.containers[*].resources}'
 ```
 
-#### Pod em CrashLoopBackOff
-
-```bash
-# Verificar logs
-kubectl logs nginx-pod
-kubectl logs nginx-pod --previous
-
-# Possíveis causas
-# - Aplicação falha ao iniciar
-# - Comando incorreto
-# - Falta variáveis de ambiente
-# - Recursos insuficientes
-
-# Solução
-# - Verificar logs de erro
-# - Validar configuração
-# - Aumentar resources.limits se OOMKilled
-```
-
-#### Service não roteia tráfego
+#### D.2. Service Sem Endpoints
 
 ```bash
 # Verificar endpoints
-kubectl get endpoints nginx-service
+kubectl get endpoints <service-name>
 
-# Se vazio
-# - Labels do Service não correspondem aos Pods
-# - Pods não estão Ready
+# Verificar selector do service
+kubectl get service <service-name> -o jsonpath='{.spec.selector}'
 
-# Verificar labels
+# Verificar labels dos pods
 kubectl get pods --show-labels
-kubectl describe service nginx-service
 
-# Solução
-# - Corrigir selector do Service
-# - Verificar readiness probes
+# Verificar se selector corresponde aos labels
+kubectl get pods -l app=myapp
 ```
 
-#### Deployment travado
+#### D.3. Deployment Não Atualiza Pods
 
 ```bash
-# Status
-kubectl rollout status deployment/nginx-deployment
+# Verificar status do rollout
+kubectl rollout status deployment/<name>
 
-# Histórico
-kubectl rollout history deployment/nginx-deployment
+# Ver histórico
+kubectl rollout history deployment/<name>
 
-# Eventos
-kubectl describe deployment nginx-deployment
+# Ver eventos
+kubectl describe deployment <name>
 
-# Possíveis causas
-# - Nova imagem com problemas
-# - Recursos insuficientes no cluster
-# - Readiness probe falhando
-
-# Solução
-# - Rollback: kubectl rollout undo deployment/nginx-deployment
-# - Verificar logs dos novos pods
-# - Verificar eventos do cluster
+# Forçar recriação de pods
+kubectl rollout restart deployment/<name>
 ```
 
 ### Apêndice E: Glossário e Termos Técnicos
 
-**ClusterIP**: Tipo de Service que expõe aplicação apenas dentro do cluster com IP virtual interno.
+**ClusterIP**: Tipo padrão de Service que expõe aplicação em IP interno ao cluster, acessível apenas de dentro do cluster.
 
-**Declarativo**: Abordagem onde estado desejado é definido em arquivos, e o sistema converge automaticamente.
+**Controller**: Componente que implementa loop de controle, observando estado do cluster e tomando ações para convergir estado atual ao desejado.
 
-**Deployment**: Controlador que gerencia ReplicaSets e fornece atualizações declarativas de Pods.
+**Declarative Configuration**: Abordagem onde administradores especificam estado desejado em manifestos e o sistema trabalha para alcançá-lo.
 
-**Downtime**: Período em que aplicação está indisponível para usuários.
+**Deployment**: Recurso que fornece atualizações declarativas para Pods e ReplicaSets, gerenciando rollouts, rollbacks e histórico de versões.
 
-**Endpoint**: IP e porta de um Pod que faz parte de um Service.
+**Downtime**: Período durante o qual aplicação ou serviço está indisponível para usuários.
 
-**Efemeridade**: Característica de recursos temporários e descartáveis que podem ser substituídos a qualquer momento.
+**Endpoints**: Objeto que rastreia endereços IP e portas de Pods que implementam um Service, atualizado automaticamente pelo Endpoints Controller.
 
-**Health Check**: Verificação periódica de saúde de containers (liveness e readiness probes).
+**Ephemeral**: Característica de recursos transitórios e descartáveis, que podem ser criados e destruídos frequentemente. Pods são efêmeros por design.
 
-**Imperativo**: Abordagem onde comandos diretos especificam ações a executar.
+**Imperative Configuration**: Abordagem onde administradores especificam comandos diretos para executar ações específicas no cluster.
 
-**Label**: Par chave-valor anexado a objetos para identificação e seleção.
+**Label**: Par chave-valor anexado a objetos para identificação e seleção. Labels não fornecem unicidade mas permitem organização flexível.
 
-**Limits**: Quantidade máxima de recursos (CPU, memória) que container pode consumir.
+**Label Selector**: Mecanismo para filtrar e selecionar recursos baseado em labels, utilizado por Controllers e Services para identificar Pods gerenciados.
 
-**LoadBalancer**: Tipo de Service que provisiona load balancer externo em provedor de nuvem.
+**LimitRange**: Política que define valores padrão, mínimos e máximos para resource requests e limits de containers em namespace.
 
-**maxSurge**: Número de Pods extras permitidos durante rolling update.
+**Liveness Probe**: Verificação periódica para determinar se container está executando corretamente. Falhas resultam em reinicialização do container.
 
-**maxUnavailable**: Número de Pods que podem estar indisponíveis durante rolling update.
+**Manifest**: Arquivo YAML ou JSON que descreve declarativamente recursos do Kubernetes, incluindo toda sua configuração.
 
-**Manifesto**: Arquivo YAML ou JSON que define configuração declarativa de recursos Kubernetes.
+**maxSurge**: Parâmetro de rolling update que especifica número máximo de Pods além de replicas que podem existir temporariamente durante atualização.
 
-**Namespace**: Isolamento lógico de recursos dentro de cluster Kubernetes.
+**maxUnavailable**: Parâmetro de rolling update que especifica número máximo de Pods que podem estar indisponíveis durante atualização.
 
-**NodePort**: Tipo de Service que expõe aplicação em porta específica de todos Nodes.
+**Namespace**: Mecanismo de isolamento lógico que particiona cluster em múltiplos clusters virtuais, fornecendo escopo para nomes de recursos.
 
-**Pod**: Menor unidade de deployment no Kubernetes, agrupa um ou mais containers.
+**NodePort**: Tipo de Service que expõe aplicação em porta específica em todos os nós do cluster, permitindo acesso externo.
 
-**Port Forward**: Encaminhamento de porta local para porta de Pod, usado para debugging.
+**Pod**: Menor unidade deployável no Kubernetes, consistindo em um ou mais containers que compartilham recursos de rede e armazenamento.
 
-**QoS (Quality of Service)**: Classificação de Pods (Guaranteed, Burstable, BestEffort) baseada em recursos.
+**Port Forwarding**: Túnel que encaminha tráfego de porta local para porta em Pod, útil para debugging e acesso direto a aplicações.
 
-**Reconciliação**: Processo de convergir estado atual ao estado desejado.
+**Readiness Probe**: Verificação que determina se container está pronto para receber tráfego. Falhas removem Pod dos endpoints do Service.
 
-**Replica**: Cópia idêntica de Pod executando em cluster.
+**Reconciliation Loop**: Processo contínuo onde controllers comparam estado atual com desejado e executam ações para convergência.
 
-**ReplicaSet**: Controlador que mantém número estável de réplicas de Pods.
+**Recreate Strategy**: Estratégia de atualização de Deployment que termina todos os Pods antigos antes de criar novos, causando downtime.
 
-**Requests**: Quantidade garantida de recursos para container.
+**Replica**: Instância individual de Pod gerenciado por controller como ReplicaSet ou Deployment.
 
-**Rollback**: Reversão para versão anterior de Deployment.
+**ReplicaSet**: Controller que mantém conjunto estável de Pods réplica executando a qualquer momento, garantindo disponibilidade através de replicação automática.
 
-**Rolling Update**: Estratégia de atualização gradual mantendo disponibilidade.
+**Resource Limits**: Quantidade máxima de recursos (CPU, memória) que container pode consumar, enforçada pela container runtime.
 
-**Rollout**: Processo de atualização de Deployment.
+**Resource Quota**: Política que limita consumo agregado de recursos em namespace, prevenindo monopolização de recursos do cluster.
 
-**Selector**: Critério baseado em labels para selecionar objetos.
+**Resource Requests**: Quantidade de recursos que container declara necessitar, utilizada pelo scheduler para decisões de placement.
 
-**Service**: Abstração que expõe conjunto de Pods como serviço de rede.
+**Rollback**: Reversão de Deployment a versão anterior, revertendo atualizações problemáticas.
 
-**Strategy**: Estratégia de atualização de Deployment (RollingUpdate ou Recreate).
+**Rolling Update**: Estratégia de atualização que substitui Pods antigos por novos gradualmente, mantendo disponibilidade durante processo.
 
-**Template**: Modelo usado por controladores para criar novos Pods.
+**Rollout**: Processo de atualização de Deployment, criando novo ReplicaSet e migrando tráfego progressivamente.
 
-**Zero-downtime deployment**: Atualização de aplicação sem interrupção de serviço.
+**Selector**: Mecanismo para identificar conjunto de recursos baseado em labels, utilizado por Controllers e Services.
+
+**Service**: Abstração que define política de acesso lógico a conjunto de Pods, fornecendo endpoint estável com descoberta DNS e balanceamento de carga.
+
+**Service Discovery**: Mecanismo que permite aplicações descobrir e comunicar com outros serviços, implementado no Kubernetes através de DNS.
+
+**SessionAffinity**: Configuração de Service que garante que requisições do mesmo cliente sejam direcionadas ao mesmo Pod backend.
+
+**Stateless Application**: Aplicação que não mantém estado local entre requisições, facilitando escalabilidade horizontal e recuperação de falhas.
+
+**Strategy**: Configuração que define como Deployments executam atualizações, incluindo RollingUpdate e Recreate.
+
+**Template**: Especificação de Pod dentro de ReplicaSet ou Deployment, definindo configuração completa dos Pods que serão criados.
+
+**TargetPort**: Porta em container para qual Service encaminha tráfego, especificada em definição de Service.
+
+**Zero Downtime Deployment**: Estratégia de atualização que mantém aplicação disponível durante todo processo de deployment, tipicamente implementada através de rolling updates. eventos relacionados ao Pod
+kubectl describe pod nginx-pod
+

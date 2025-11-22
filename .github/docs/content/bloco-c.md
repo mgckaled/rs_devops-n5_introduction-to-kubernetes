@@ -1,986 +1,562 @@
 <!-- markdownlint-disable -->
 
-# Kubernetes: Deployment e Configuração de Aplicações em Produção
+# Bloco C - Deployment e Configuração de Aplicações em Produção
 
-## 1. Resumo Executivo
+## Resumo Executivo
 
-Este documento apresenta os conceitos e práticas essenciais para deployment de aplicações reais no Kubernetes, abordando desde a containerização até o gerenciamento de configurações sensíveis. O foco está em demonstrar o ciclo completo de uma aplicação em produção, incluindo build de imagens Docker, versionamento adequado, gerenciamento de configurações através de ConfigMaps e Secrets, estratégias avançadas de deployment e práticas de rollback. O conteúdo explora problemas comuns encontrados em ambientes produtivos, como mutabilidade de tags de imagem, gerenciamento de variáveis de ambiente e escolha de estratégias de deployment apropriadas. Através de uma abordagem teórica fundamentada em casos práticos, o documento estabelece as bases para operações confiáveis, seguras e escaláveis de aplicações containerizadas no Kubernetes.
+A transição de conceitos teóricos do Kubernetes para implementação prática de aplicações reais requer compreensão profunda não apenas dos recursos fundamentais da plataforma, mas também das melhores práticas de desenvolvimento, containerização, gestão de configurações e estratégias de deployment que garantam operações confiáveis e sustentáveis em ambientes de produção. Este documento explora sistematicamente o ciclo completo de implantação de aplicações no Kubernetes, desde a containerização até gestão de configurações sensíveis, utilizando aplicação NestJS como referência para demonstrar padrões e práticas aplicáveis a qualquer stack tecnológica.
 
-## 2. Introdução e Conceitos
+O processo de containerização constitui ponto de partida fundamental, transformando aplicações em artefatos portáveis e imutáveis através de Docker images que encapsulam código, dependências e configurações de runtime. A construção de images otimizadas, minimizando tamanho e maximizando eficiência de caching de layers, impacta diretamente velocidade de deployments, utilização de rede e armazenamento em registries. A gestão apropriada de tags de imagens emerge como prática crítica: enquanto tags mutáveis como `latest` oferecem conveniência durante desenvolvimento, introduzem riscos substanciais em produção através de indeterminismo e impossibilidade de rollbacks precisos, motivando uso de tags imutáveis baseadas em commit hashes ou semantic versioning.
 
-### 2.1. Ciclo de Vida de Aplicações no Kubernetes
+Estratégias de deployment no Kubernetes determinam como novas versões de aplicações substituem versões antigas, equilibrando disponibilidade, velocidade de rollout e consumo de recursos. Rolling updates, estratégia padrão do Kubernetes, substituem Pods gradualmente através de parâmetros configuráveis `maxSurge` e `maxUnavailable` que controlam quantos Pods adicionais podem ser criados temporariamente e quantos podem estar indisponíveis durante atualização. A estratégia Recreate, que termina todos os Pods antigos antes de criar novos, embora cause downtime completo, pode ser necessária para aplicações que não suportam múltiplas versões executando simultaneamente ou que requerem migrações de schema incompatíveis.
 
-O deployment de aplicações no Kubernetes envolve múltiplas etapas que devem ser compreendidas e executadas corretamente para garantir confiabilidade e segurança.
+A separação de configuração de código através de ConfigMaps para dados não-sensíveis e Secrets para informações confidenciais representa princípio fundamental de aplicações cloud-native, permitindo mesma imagem de container executar em múltiplos ambientes com configurações distintas. Esta abordagem facilita promoção de aplicações através de pipelines de CI/CD, simplifica gestão de configurações específicas de ambiente, e melhora segurança através de controle granular de acesso a informações sensíveis. A injeção de configurações pode ocorrer através de variáveis de ambiente individuais, importação completa de ConfigMaps/Secrets, ou montagem como volumes, cada abordagem apropriada para diferentes cenários e requisitos de aplicação.
 
-#### Fases do Ciclo
+## 1. Introdução e Conceitos
 
-1. **Desenvolvimento**: Criação da aplicação e suas dependências
-2. **Containerização**: Empacotamento em imagem Docker
-3. **Registro**: Armazenamento em Container Registry
-4. **Deployment**: Implantação no cluster Kubernetes
-5. **Configuração**: Injeção de variáveis e secrets
-6. **Exposição**: Disponibilização via Services
-7. **Monitoramento**: Observabilidade e métricas
-8. **Atualização**: Rollout de novas versões
-9. **Rollback**: Reversão em caso de problemas
+### 1.1. Do Desenvolvimento Local ao Cluster Kubernetes
 
-### 2.2. Containerização de Aplicações
+A jornada de uma aplicação desde ambiente de desenvolvimento local até execução em cluster Kubernetes de produção envolve múltiplas transformações e considerações que transcendem simplesmente "fazer funcionar no Kubernetes". Aplicações desenvolvidas localmente tipicamente assumem presença de recursos específicos (bases de dados, caches, serviços externos) acessíveis através de configurações hard-coded ou arquivos de ambiente locais. A containerização força explicitação de todas as dependências e configurações, enquanto deployment em Kubernetes adiciona camadas de abstração, resiliência e escalabilidade que requerem design consciente desde concepção da aplicação.
 
-#### Conceito de Container
+O paradigma de aplicações cloud-native enfatiza características como statelessness, externalização de configuração, observabilidade através de logs estruturados e métricas, e design para falha que assume components individuais podem e irão falhar, requerendo que aplicações implementem graceful degradation e recovery. Esta mudança de mentalidade - de aplicações como entidades monolíticas e persistentes para componentes efêmeros e substituíveis - fundamenta práticas modernas de deployment e operação em Kubernetes.
 
-Containers encapsulam aplicações e todas as suas dependências em uma unidade executável consistente. No contexto do Kubernetes, a qualidade da imagem Docker impacta diretamente:
+### 1.2. Containerização como Fundação
 
-- **Tempo de deployment**: Imagens menores são transferidas mais rapidamente
-- **Consumo de recursos**: Imagens otimizadas usam menos disco e memória
-- **Superfície de ataque**: Menos componentes reduzem vulnerabilidades
-- **Tempo de startup**: Imagens enxutas inicializam mais rápido
+Containers proporcionam unidade padrão de empacotamento que encapsula aplicação e todas suas dependências, garantindo consistência entre ambientes de desenvolvimento, teste e produção. Diferentemente de virtualização tradicional onde cada máquina virtual inclui sistema operacional completo, containers compartilham kernel do host, resultando em overhead significativamente menor e tempos de inicialização medidos em segundos ao invés de minutos.
 
-#### Dockerfile: Anatomia
+Docker tornou-se runtime de containers de facto, embora Kubernetes suporte outras implementações através da Container Runtime Interface (CRI). A criação de container images através de Dockerfiles define processo reproduzível que transforma código-fonte em artefato deployável, documentando simultaneamente dependências e processo de build da aplicação.
 
 ```dockerfile
-# Imagem base
+# Exemplo de Dockerfile multi-stage para aplicação Node.js
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY . .
+RUN npm run build
+
+FROM node:18-alpine
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY package*.json ./
+EXPOSE 3000
+CMD ["node", "dist/main"]
+```
+
+### 1.3. Registries de Container: Armazenamento e Distribuição
+
+Container registries servem como repositórios centralizados para armazenar, gerenciar e distribuir container images. Docker Hub constitui registry público mais conhecido, mas organizações frequentemente utilizam registries privados (AWS ECR, Google Container Registry, Azure Container Registry, Harbor) para manter controle sobre images proprietárias e implementar políticas de segurança e compliance.
+
+O fluxo típico envolve build de image localmente ou em pipeline de CI, push para registry, e pull posterior pelo kubelet em cada nó quando Pods são schedulados. Este modelo distribuído permite que qualquer nó no cluster obtenha images necessárias sem dependência de armazenamento centralizado compartilhado.
+
+```bash
+# Autenticação com Docker Hub
+docker login
+
+# Build de image com tag
+docker build -t username/application:v1.0.0 .
+
+# Push para registry
+docker push username/application:v1.0.0
+
+# Pull em outro ambiente (executado automaticamente pelo kubelet)
+docker pull username/application:v1.0.0
+```
+
+## 2. Containerização de Aplicações
+
+### 2.1. Estrutura de Projeto NestJS
+
+NestJS é framework Node.js para construir aplicações server-side eficientes e escaláveis, utilizando TypeScript por padrão e incorporando conceitos de arquiteturas modulares e injeção de dependências. A estrutura típica de projeto NestJS organiza código em modules, controllers e services.
+
+```typescript
+// src/main.ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  
+  // Configuração de porta via variável de ambiente
+  const port = process.env.PORT || 3000;
+  
+  await app.listen(port);
+  console.log(`Application is running on: http://localhost:${port}`);
+}
+
+bootstrap();
+```
+
+```typescript
+// src/app.controller.ts
+import { Controller, Get } from '@nestjs/common';
+import { AppService } from './app.service';
+
+@Controller()
+export class AppController {
+  constructor(private readonly appService: AppService) {}
+
+  @Get()
+  getHello(): string {
+    return this.appService.getHello();
+  }
+
+  @Get('health')
+  getHealth(): object {
+    return {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    };
+  }
+}
+```
+
+### 2.2. Dockerfile Otimizado
+
+A construção de Dockerfiles otimizados requer compreensão de como Docker processa layers e utiliza cache para acelerar builds subsequentes. Cada instrução em Dockerfile cria nova layer, e Docker reutiliza layers cacheadas quando instruções e contexto não mudaram.
+
+```dockerfile
+# Dockerfile multi-stage para aplicação NestJS
+
+# Stage 1: Build
 FROM node:18-alpine AS builder
 
-# Diretório de trabalho
+# Instalar dependências necessárias para build
+RUN apk add --no-cache python3 make g++
+
+# Definir diretório de trabalho
 WORKDIR /app
 
-# Cópia de arquivos de dependências
-COPY package*.json ./
+# Copiar arquivos de dependências primeiro (melhor caching)
+COPY package.json package-lock.json ./
 
-# Instalação de dependências
-RUN npm ci --only=production
+# Instalar dependências de produção e desenvolvimento
+RUN npm ci
 
-# Cópia do código fonte
+# Copiar código fonte
 COPY . .
 
 # Build da aplicação
 RUN npm run build
 
-# Estágio de produção
+# Remover dev dependencies
+RUN npm prune --production
+
+# Stage 2: Runtime
 FROM node:18-alpine
 
+# Criar usuário não-root para segurança
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nestjs -u 1001
+
+# Definir diretório de trabalho
 WORKDIR /app
 
-# Cópia de dependências e build do estágio anterior
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
+# Copiar node_modules e build do stage anterior
+COPY --from=builder --chown=nestjs:nodejs /app/node_modules ./node_modules
+COPY --from=builder --chown=nestjs:nodejs /app/dist ./dist
+COPY --from=builder --chown=nestjs:nodejs /app/package*.json ./
 
-# Exposição de porta
+# Mudar para usuário não-root
+USER nestjs
+
+# Expor porta
 EXPOSE 3000
 
-# Usuário não-root (segurança)
-USER node
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1); })"
 
-# Comando de execução
+# Comando de inicialização
 CMD ["node", "dist/main.js"]
 ```
 
-#### Componentes do Dockerfile
+### 2.3. Dockerignore para Build Eficiente
 
-**FROM**: Imagem base
-- Use versões específicas (não latest)
-- Prefira imagens alpine (menores)
-- Considere multi-stage builds
+O arquivo `.dockerignore` previne que arquivos desnecessários sejam incluídos no contexto de build, reduzindo tamanho e tempo de build.
 
-**WORKDIR**: Diretório de trabalho
-- Define contexto de execução
-- Organiza estrutura de arquivos
-
-**COPY**: Cópia de arquivos
-- Ordem importa para cache de layers
-- Copie dependências antes do código
-
-**RUN**: Execução de comandos
-- Minimize número de layers
-- Combine comandos relacionados
-- Limpe cache após instalações
-
-**EXPOSE**: Documentação de porta
-- Não abre porta automaticamente
-- Informativo para usuários da imagem
-
-**USER**: Usuário de execução
-- Nunca use root em produção
-- Crie usuário dedicado ou use node
-
-**CMD/ENTRYPOINT**: Comando de inicialização
-- CMD: pode ser sobrescrito
-- ENTRYPOINT: ponto de entrada fixo
-
-#### Multi-stage Builds
-
-Técnica para reduzir tamanho final da imagem:
-
-```dockerfile
-# Estágio 1: Build
-FROM node:18 AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-# Estágio 2: Produção (somente artefatos necessários)
-FROM node:18-alpine
-WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-CMD ["node", "dist/main.js"]
+```
+# .dockerignore
+node_modules
+npm-debug.log
+dist
+.git
+.gitignore
+README.md
+.env
+.env.*
+*.md
+.vscode
+.idea
+coverage
+.nyc_output
 ```
 
-**Benefícios**:
-- Imagem final contém apenas artefatos de produção
-- Ferramentas de build não incluídas
-- Redução drástica de tamanho (GB → MB)
-
-### 2.3. Container Registry
-
-#### Função e Importância
-
-Container Registry é repositório centralizado para armazenar e distribuir imagens Docker.
-
-**Provedores Principais**:
-- **Docker Hub**: Público e privado, gratuito com limitações
-- **Amazon ECR**: Integrado com AWS
-- **Google GCR**: Integrado com GCP
-- **Azure ACR**: Integrado com Azure
-- **GitHub Container Registry**: Integrado com GitHub
-- **Harbor**: Self-hosted, open source
-
-#### Workflow de Registry
+### 2.4. Build e Push de Images
 
 ```bash
-# 1. Build da imagem
-docker build -t myapp:1.0.0 .
+# Build de image
+docker build -t myusername/nestjs-app:v1.0.0 .
 
-# 2. Tag com endereço do registry
-docker tag myapp:1.0.0 username/myapp:1.0.0
+# Verificar image criada
+docker images | grep nestjs-app
 
-# 3. Login no registry
+# Tag adicional (latest deve ser evitado em produção)
+docker tag myusername/nestjs-app:v1.0.0 myusername/nestjs-app:latest
+
+# Login no Docker Hub
 docker login
 
-# 4. Push da imagem
-docker push username/myapp:1.0.0
+# Push para registry
+docker push myusername/nestjs-app:v1.0.0
+docker push myusername/nestjs-app:latest
+
+# Testar image localmente
+docker run -p 3000:3000 myusername/nestjs-app:v1.0.0
 ```
 
-#### Autenticação do Kubernetes
+### 2.5. Otimizações de Tamanho de Image
 
-Para pull de imagens privadas, Kubernetes usa ImagePullSecrets:
+```dockerfile
+# Usar base image alpine (significativamente menor)
+FROM node:18-alpine
+
+# Multi-stage builds para separar build de runtime
+FROM node:18 AS builder
+# ... build steps ...
+FROM node:18-alpine
+COPY --from=builder /app/dist ./dist
+
+# Remover arquivos desnecessários
+RUN npm prune --production && \
+    rm -rf /root/.npm /tmp/*
+
+# Usar .dockerignore apropriadamente
+```
+
+Comparação de tamanhos:
+- `node:18` (Debian-based): ~900MB
+- `node:18-alpine`: ~150MB
+- Multi-stage optimized: ~100-150MB
+
+## 3. Deployment no Kubernetes
+
+### 3.1. Manifesto de Deployment
 
 ```yaml
-apiVersion: v1
-kind: Secret
+# deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: registry-credentials
-type: kubernetes.io/dockerconfigjson
-data:
-  .dockerconfigjson: <base64-encoded-docker-config>
-```
-
-Referência no Deployment:
-
-```yaml
+  name: nestjs-app
+  namespace: production
+  labels:
+    app: nestjs-app
+    version: v1.0.0
 spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nestjs-app
   template:
+    metadata:
+      labels:
+        app: nestjs-app
+        version: v1.0.0
     spec:
-      imagePullSecrets:
-      - name: registry-credentials
       containers:
-      - name: app
-        image: private-registry.com/myapp:1.0.0
+      - name: nestjs-app
+        image: myusername/nestjs-app:v1.0.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: http
+          protocol: TCP
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
 ```
 
-### 2.4. Versionamento de Imagens
-
-#### Estratégias de Versionamento
-
-**Semantic Versioning** (recomendado):
-
-```text
-MAJOR.MINOR.PATCH
-1.0.0 → 1.0.1 (patch: bug fix)
-1.0.1 → 1.1.0 (minor: nova feature)
-1.1.0 → 2.0.0 (major: breaking change)
-```
-
-**Commit-based**:
-
-```bash
-# Tag baseada em commit hash
-docker build -t myapp:abc1234 .
-docker build -t myapp:commit-abc1234 .
-```
-
-**Timestamp**:
-
-```bash
-# Tag com data/hora
-docker build -t myapp:2024-01-15-143000 .
-```
-
-**Branch-based** (ambientes):
-
-```bash
-docker build -t myapp:develop .
-docker build -t myapp:staging .
-docker build -t myapp:production-v1.2.3 .
-```
-
-#### Problema da Tag Latest
-
-**Por que evitar latest**:
-
-1. **Não-determinístico**: Latest muda sem aviso
-2. **Impossível rastrear**: Qual versão está rodando?
-3. **Rollback inviável**: Não há versão anterior definida
-4. **Cache problemático**: ImagePullPolicy comporta-se diferente
-5. **Ambiguidade**: Latest local ≠ latest remote
-
-**Exemplo de problema**:
+### 3.2. Service para Exposição
 
 ```yaml
-# Deployment com tag latest
+# service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nestjs-app-service
+  namespace: production
+  labels:
+    app: nestjs-app
+spec:
+  type: ClusterIP
+  selector:
+    app: nestjs-app
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+    name: http
+```
+
+### 3.3. Aplicação e Verificação
+
+```bash
+# Criar namespace
+kubectl create namespace production
+
+# Aplicar manifests
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+
+# Verificar deployment
+kubectl get deployment -n production
+kubectl get pods -n production
+kubectl get service -n production
+
+# Descrever recursos
+kubectl describe deployment nestjs-app -n production
+kubectl describe pod <pod-name> -n production
+
+# Ver logs
+kubectl logs -n production <pod-name>
+kubectl logs -n production <pod-name> --follow
+
+# Port forward para teste
+kubectl port-forward -n production service/nestjs-app-service 8080:80
+
+# Testar aplicação
+curl http://localhost:8080
+curl http://localhost:8080/health
+```
+
+## 4. Gestão de Tags de Imagens
+
+### 4.1. O Problema com Tags Mutáveis
+
+Tags como `latest` são mutáveis - o mesmo nome de tag pode apontar para diferentes images ao longo do tempo. Esta mutabilidade introduz múltiplos problemas:
+
+- **Indeterminismo**: Impossível saber qual versão específica de image está executando
+- **Rollbacks problemáticos**: `kubectl rollout undo` pode não reverter para versão esperada
+- **Inconsistência entre ambientes**: Diferentes nós podem ter versões diferentes cacheadas
+- **Auditoria impossível**: Não há registro claro de qual código está em produção
+
+```yaml
+# EVITAR em produção
 spec:
   containers:
   - name: app
-    image: myapp:latest  # PROBLEMA!
-    imagePullPolicy: IfNotPresent  # Não puxa se já existe localmente
+    image: myapp:latest  # Problema: qual versão exatamente?
+    imagePullPolicy: Always  # Força pull mesmo que tag seja mesmo
 ```
 
-Se node já tem myapp:latest local, nova versão não será puxada mesmo com nova build.
+### 4.2. Image Pull Policy
 
-### 2.5. ImagePullPolicy
+O `imagePullPolicy` determina quando kubelet deve pullar image do registry:
 
-Controla quando Kubernetes puxa imagem do registry.
-
-#### Políticas Disponíveis
-
-**Always**:
-
-```yaml
-imagePullPolicy: Always
-```
-
-- Sempre puxa imagem do registry
-- Ignora cache local
-- Garante versão mais recente
-- Mais lento (network overhead)
-- **Recomendado**: Tag latest ou mutável
-
-**IfNotPresent** (padrão para tags específicas):
-
-```yaml
-imagePullPolicy: IfNotPresent
-```
-
-- Puxa apenas se não existe localmente
-- Usa cache quando possível
-- Mais rápido
-- **Problema**: Não detecta mudanças em tag mutável
-- **Recomendado**: Tags imutáveis (v1.2.3, commit-abc123)
-
-**Never**:
-
-```yaml
-imagePullPolicy: Never
-```
-
-- Nunca puxa do registry
-- Usa apenas imagens locais
-- Útil para desenvolvimento local
-- **Nunca use em produção**
-
-#### Comportamento Padrão
-
-Kubernetes define automaticamente baseado na tag:
-
-```yaml
-# Tag específica → IfNotPresent
-image: myapp:1.2.3
-# imagePullPolicy: IfNotPresent (implícito)
-
-# Tag latest → Always
-image: myapp:latest
-# imagePullPolicy: Always (implícito)
-
-# Sem tag → Always
-image: myapp
-# imagePullPolicy: Always (implícito)
-```
-
-#### Melhores Práticas
-
-1. **Use tags imutáveis** (commit hash, semantic version)
-2. **Especifique imagePullPolicy explicitamente**
-3. **IfNotPresent com tags específicas** (performance)
-4. **Always apenas com latest** (se realmente necessário)
-5. **Nunca mude conteúdo de tag existente**
-
-## 3. ConfigMaps: Gerenciamento de Configuração
-
-### 3.1. Conceito e Propósito
-
-ConfigMap é objeto Kubernetes para armazenar dados de configuração não sensíveis em pares chave-valor.
-
-#### Casos de Uso
-
-- **Variáveis de ambiente**: URLs, portas, nomes
-- **Arquivos de configuração**: config.json, application.yml
-- **Scripts**: Inicialização, healthchecks
-- **Parâmetros de aplicação**: Features flags, timeouts
-- **Configurações específicas de ambiente**: dev, staging, prod
-
-#### Separação de Responsabilidades
-
-```text
-Código (Imagem Docker) → O QUE fazer
-ConfigMap → COMO fazer (configuração)
-```
-
-**Benefícios**:
-- Mesma imagem, diferentes configurações
-- Mudança sem rebuild
-- Configuração versionável (Git)
-- Facilitação de ambientes múltiplos
-
-### 3.2. Criação de ConfigMaps
-
-#### Imperativo: a partir de literais
-
-```bash
-kubectl create configmap app-config \
-  --from-literal=APP_NAME=MyApplication \
-  --from-literal=APP_ENV=production \
-  --from-literal=LOG_LEVEL=info
-```
-
-#### Imperativo: a partir de arquivo
-
-Arquivo `app.env`:
-
-```env
-APP_NAME=MyApplication
-APP_ENV=production
-LOG_LEVEL=info
-DATABASE_HOST=postgres.default.svc.cluster.local
-```
-
-```bash
-kubectl create configmap app-config --from-file=app.env
-```
-
-#### Imperativo: a partir de diretório
-
-```bash
-kubectl create configmap nginx-config --from-file=./config-files/
-```
-
-#### Declarativo: YAML
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: app-config
-  namespace: production
-data:
-  APP_NAME: "MyApplication"
-  APP_ENV: "production"
-  LOG_LEVEL: "info"
-  DATABASE_HOST: "postgres.default.svc.cluster.local"
-  DATABASE_PORT: "5432"
-```
-
-### 3.3. Consumindo ConfigMaps
-
-#### Variável de Ambiente Individual
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: myapp-pod
-spec:
-  containers:
-  - name: myapp
-    image: myapp:1.0.0
-    env:
-    - name: APP_NAME
-      valueFrom:
-        configMapKeyRef:
-          name: app-config
-          key: APP_NAME
-    - name: LOG_LEVEL
-      valueFrom:
-        configMapKeyRef:
-          name: app-config
-          key: LOG_LEVEL
-```
-
-**Características**:
-- Granular: Seleciona chaves específicas
-- Renomeável: Nome da env ≠ chave do ConfigMap
-- Explícito: Fica claro quais variáveis são usadas
-
-#### Todas as Variáveis (envFrom)
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: myapp-pod
-spec:
-  containers:
-  - name: myapp
-    image: myapp:1.0.0
-    envFrom:
-    - configMapRef:
-        name: app-config
-```
-
-**Características**:
-- Todas as chaves do ConfigMap viram variáveis de ambiente
-- Nome da variável = chave do ConfigMap
-- Mais simples para muitas variáveis
-- Menos controle sobre nomes
-
-#### Prefixo em envFrom
-
-```yaml
-envFrom:
-- prefix: "CONFIG_"
-  configMapRef:
-    name: app-config
-```
-
-Resultado: `CONFIG_APP_NAME`, `CONFIG_LOG_LEVEL`, etc.
-
-#### ConfigMap como Volume
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: myapp-pod
-spec:
-  containers:
-  - name: myapp
-    image: myapp:1.0.0
-    volumeMounts:
-    - name: config-volume
-      mountPath: /etc/config
-      readOnly: true
-  volumes:
-  - name: config-volume
-    configMap:
-      name: app-config
-```
-
-**Resultado**:
-```text
-/etc/config/APP_NAME → conteúdo: MyApplication
-/etc/config/APP_ENV → conteúdo: production
-/etc/config/LOG_LEVEL → conteúdo: info
-```
-
-**Uso**: Arquivos de configuração complexos (JSON, YAML, XML)
-
-#### Volume com Subpath Específico
-
-```yaml
-volumeMounts:
-- name: config
-  mountPath: /app/config.json
-  subPath: config.json
-volumes:
-- name: config
-  configMap:
-    name: app-config
-    items:
-    - key: app-config.json
-      path: config.json
-```
-
-### 3.4. Atualização de ConfigMaps
-
-#### Atualização de ConfigMap Existente
-
-```bash
-kubectl edit configmap app-config
-```
-
-Ou aplicar novo manifesto:
-
-```bash
-kubectl apply -f configmap.yaml
-```
-
-#### Propagação para Pods
-
-**Volume**: Atualização automática (após ~1min)
-- kubelet detecta mudança
-- Atualiza arquivos montados
-- Aplicação deve reload configuração
-
-**Environment Variables**: NÃO atualiza automaticamente
-- Variáveis definidas na criação do Pod
-- Necessário recriar Pods (rollout restart)
-
-```bash
-# Forçar restart de Deployment
-kubectl rollout restart deployment/myapp
-```
-
-### 3.5. ConfigMap Opcional
-
-```yaml
-env:
-- name: OPTIONAL_CONFIG
-  valueFrom:
-    configMapKeyRef:
-      name: optional-config
-      key: value
-      optional: true  # Não falha se ConfigMap não existir
-```
-
-### 3.6. Imutabilidade de ConfigMaps
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: app-config
-data:
-  APP_NAME: "MyApp"
-immutable: true  # Não pode ser modificado
-```
-
-**Benefícios**:
-- Proteção contra mudanças acidentais
-- Performance (kubelet não monitora mudanças)
-- Segurança (prevenção de alterações maliciosas)
-
-**Limitação**: Necessário criar novo ConfigMap para mudanças
-
-## 4. Secrets: Gerenciamento de Dados Sensíveis
-
-### 4.1. Conceito e Propósito
-
-Secrets armazenam informações sensíveis (senhas, tokens, chaves) de forma mais segura que ConfigMaps.
-
-#### Diferenças ConfigMap vs Secret
-
-| Aspecto | ConfigMap | Secret |
-|---------|-----------|---------|
-| Propósito | Configuração não sensível | Dados sensíveis |
-| Codificação | Texto plano | Base64 |
-| Armazenamento etcd | Plano (default) | Pode ser criptografado |
-| RBAC | Mesmo que outros recursos | Mais restritivo recomendado |
-| Uso | Configs gerais | Credenciais, tokens, chaves |
-
-#### Tipos de Secrets
-
-**Opaque** (genérico):
-
-```yaml
-type: Opaque
-```
-
-**kubernetes.io/dockerconfigjson** (pull secrets):
-
-```yaml
-type: kubernetes.io/dockerconfigjson
-```
-
-**kubernetes.io/tls** (certificados TLS):
-
-```yaml
-type: kubernetes.io/tls
-```
-
-**kubernetes.io/service-account-token**:
-
-```yaml
-type: kubernetes.io/service-account-token
-```
-
-### 4.2. Criação de Secrets
-
-#### Imperativo: literais
-
-```bash
-kubectl create secret generic db-credentials \
-  --from-literal=username=admin \
-  --from-literal=password=SuperSecret123
-```
-
-#### Imperativo: arquivo
-
-```bash
-# Arquivo db-password.txt contém a senha
-kubectl create secret generic db-password \
-  --from-file=password=./db-password.txt
-```
-
-#### Declarativo: YAML (valores em base64)
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: db-credentials
-  namespace: production
-type: Opaque
-data:
-  username: YWRtaW4=        # "admin" em base64
-  password: U3VwZXJTZWNyZXQxMjM=  # "SuperSecret123" em base64
-```
-
-**Encoding base64**:
-
-```bash
-echo -n 'admin' | base64
-# YWRtaW4=
-
-echo -n 'SuperSecret123' | base64
-# U3VwZXJTZWNyZXQxMjM=
-```
-
-**Decoding**:
-
-```bash
-echo 'YWRtaW4=' | base64 -d
-# admin
-```
-
-#### stringData (texto plano no manifesto)
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: db-credentials
-type: Opaque
-stringData:  # Kubernetes converte para base64
-  username: admin
-  password: SuperSecret123
-```
-
-**Atenção**: stringData é conveniência, mas expõe segredo em manifesto
-
-### 4.3. Consumindo Secrets
-
-#### Variável de Ambiente Individual
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: myapp
-spec:
-  containers:
-  - name: myapp
-    image: myapp:1.0.0
-    env:
-    - name: DB_USERNAME
-      valueFrom:
-        secretKeyRef:
-          name: db-credentials
-          key: username
-    - name: DB_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: db-credentials
-          key: password
-```
-
-#### Todas as Chaves (envFrom)
+- **Always**: Sempre pull image, mesmo se já existe localmente
+- **IfNotPresent**: Pull apenas se image não existe localmente
+- **Never**: Nunca pull, use apenas image local (falhará se não existir)
 
 ```yaml
 spec:
   containers:
-  - name: myapp
-    image: myapp:1.0.0
-    envFrom:
-    - secretRef:
-        name: db-credentials
+  - name: app
+    image: myapp:v1.0.0
+    imagePullPolicy: IfNotPresent  # Recomendado com tags específicas
 ```
 
-Resultado: Variáveis `username` e `password`
+Comportamento padrão:
+- Tag `:latest` ou sem tag: `imagePullPolicy: Always`
+- Tag específica: `imagePullPolicy: IfNotPresent`
 
-#### Secret como Volume
-
-```yaml
-spec:
-  containers:
-  - name: myapp
-    image: myapp:1.0.0
-    volumeMounts:
-    - name: db-secrets
-      mountPath: /secrets
-      readOnly: true
-  volumes:
-  - name: db-secrets
-    secret:
-      secretName: db-credentials
-```
-
-Resultado:
-```text
-/secrets/username → admin
-/secrets/password → SuperSecret123
-```
-
-**Vantagem**: Secrets em volumes são automaticamente atualizados
-
-### 4.4. Segurança de Secrets
-
-#### Limitações do Base64
-
-Base64 **NÃO é criptografia**, é apenas encoding:
+### 4.3. Tags Imutáveis Baseadas em Semantic Versioning
 
 ```bash
-kubectl get secret db-credentials -o yaml
-# Qualquer pessoa com acesso pode decodificar
+# Formato: <registry>/<repository>:<major>.<minor>.<patch>
+docker build -t myusername/nestjs-app:1.0.0 .
+docker push myusername/nestjs-app:1.0.0
 ```
-
-#### Práticas de Segurança
-
-1. **Encryption at Rest**: Habilitar criptografia do etcd
-
-```yaml
-# /etc/kubernetes/encryption-config.yaml
-apiVersion: apiserver.config.k8s.io/v1
-kind: EncryptionConfiguration
-resources:
-  - resources:
-    - secrets
-    providers:
-    - aescbc:
-        keys:
-        - name: key1
-          secret: <base64-encoded-32-byte-key>
-    - identity: {}
-```
-
-2. **RBAC Restritivo**:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: secret-reader
-rules:
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list"]
-  resourceNames: ["db-credentials"]  # Apenas este secret
-```
-
-3. **Namespaces Separados**: Isolar secrets por ambiente
-
-4. **Secret Managers Externos**:
-   - **HashiCorp Vault**
-   - **AWS Secrets Manager**
-   - **Azure Key Vault**
-   - **Google Secret Manager**
-
-#### Vault Integration
-
-```yaml
-annotations:
-  vault.hashicorp.com/agent-inject: "true"
-  vault.hashicorp.com/role: "myapp"
-  vault.hashicorp.com/agent-inject-secret-db: "secret/data/database/config"
-```
-
-Vault injeta secrets dinamicamente sem armazená-los no Kubernetes.
-
-### 4.5. Secrets Imutáveis
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: db-credentials
-type: Opaque
-data:
-  username: YWRtaW4=
-  password: U3VwZXJTZWNyZXQxMjM=
-immutable: true
-```
-
-**Benefícios**: Mesmos do ConfigMap imutável
-
-## 5. Combinando env e envFrom
-
-### 5.1. Múltiplas Fontes
 
 ```yaml
 spec:
   containers:
-  - name: myapp
-    image: myapp:1.0.0
-    env:
-    # Variável direta
-    - name: NODE_ENV
-      value: "production"
-    # De ConfigMap
-    - name: APP_NAME
-      valueFrom:
-        configMapKeyRef:
-          name: app-config
-          key: APP_NAME
-    # De Secret
-    - name: API_KEY
-      valueFrom:
-        secretKeyRef:
-          name: api-secrets
-          key: key
-    envFrom:
-    # Todas de ConfigMap
-    - configMapRef:
-        name: app-config
-    # Todas de Secret
-    - secretRef:
-        name: db-credentials
+  - name: app
+    image: myusername/nestjs-app:1.0.0  # Tag imutável
+    imagePullPolicy: IfNotPresent
 ```
 
-### 5.2. Precedência de Variáveis
+### 4.4. Tags Baseadas em Git Commit
 
-Quando mesma variável definida em múltiplas fontes:
+```bash
+# Obter commit hash
+COMMIT_HASH=$(git rev-parse --short HEAD)
 
-```yaml
-env:
-- name: LOG_LEVEL
-  value: "debug"  # Define primeiro
+# Build com commit hash
+docker build -t myusername/nestjs-app:${COMMIT_HASH} .
+docker push myusername/nestjs-app:${COMMIT_HASH}
 
-envFrom:
-- configMapRef:
-    name: app-config  # Contém LOG_LEVEL: "info"
+# Também criar tag de versão
+docker tag myusername/nestjs-app:${COMMIT_HASH} myusername/nestjs-app:1.0.0
+docker push myusername/nestjs-app:1.0.0
 ```
-
-**Resultado**: `env` tem precedência sobre `envFrom`
-- LOG_LEVEL = "debug"
-
-**Ordem de precedência** (maior para menor):
-1. `env` (variáveis diretas)
-2. `envFrom` (última ocorrência prevalece)
-
-### 5.3. Validação de Variáveis
-
-#### Problema
-
-`envFrom` injeta TODAS as chaves. Se aplicação espera `DATABASE_URL` mas ConfigMap tem `DB_URL`, aplicação falhará sem variável esperada.
-
-#### Solução
-
-1. **Documentar variáveis esperadas**: README, schema
-2. **Validação na aplicação**: Startup checks
-3. **Testes de integração**: Verificar variáveis necessárias
-4. **Preferir env explícito** quando crítico
-
-```typescript
-// Validação de variáveis na aplicação
-const requiredEnvVars = [
-  'DATABASE_URL',
-  'API_KEY',
-  'APP_NAME'
-];
-
-requiredEnvVars.forEach(varName => {
-  if (!process.env[varName]) {
-    throw new Error(`Missing required environment variable: ${varName}`);
-  }
-});
-```
-
-## 6. Estratégias Avançadas de Deployment
-
-### 6.1. Rolling Update (Padrão)
-
-Já abordado no Bloco B, reiteramos conceitos com foco em produção.
-
-#### Configuração Otimizada
 
 ```yaml
 spec:
-  replicas: 10
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 3        # Permite 30% a mais temporariamente
-      maxUnavailable: 1  # Apenas 10% indisponível por vez
-  minReadySeconds: 30    # Aguarda 30s antes de considerar Ready
-  progressDeadlineSeconds: 600  # Timeout de 10min
+  containers:
+  - name: app
+    image: myusername/nestjs-app:a3f8c2d  # Commit hash garante rastreabilidade exata
+    imagePullPolicy: IfNotPresent
 ```
 
-**Análise**:
-- maxSurge: 3 → Pode ter 13 Pods temporariamente (10 + 3)
-- maxUnavailable: 1 → Mínimo de 9 Pods sempre disponíveis
-- minReadySeconds: 30 → Detecta problemas de startup
-- progressDeadlineSeconds: 600 → Evita rollouts travados
+### 4.5. Atualização de Image em Deployment
 
-### 6.2. Recreate
+```bash
+# Método 1: Kubectl set image
+kubectl set image deployment/nestjs-app \
+  nestjs-app=myusername/nestjs-app:v1.1.0 \
+  -n production
 
-Deleta todos Pods antes de criar novos.
+# Método 2: Edit inline
+kubectl edit deployment nestjs-app -n production
+# Alterar spec.template.spec.containers[0].image
 
-#### Configuração
+# Método 3: Patch
+kubectl patch deployment nestjs-app -n production \
+  -p '{"spec":{"template":{"spec":{"containers":[{"name":"nestjs-app","image":"myusername/nestjs-app:v1.1.0"}]}}}}'
 
-```yaml
-spec:
-  strategy:
-    type: Recreate
+# Método 4 (RECOMENDADO): Atualizar manifesto e aplicar
+# Editar deployment.yaml alterando image tag
+kubectl apply -f deployment.yaml
 ```
 
-#### Fluxo de Execução
+## 5. Estratégias de Deployment
 
-1. Escala ReplicaSet antigo para 0
-2. Aguarda todos Pods terminarem
-3. Cria ReplicaSet novo
-4. Escala para número de réplicas desejado
+### 5.1. Rolling Update
 
-#### Quando Usar
-
-**Casos de uso apropriados**:
-- Aplicação não suporta múltiplas versões simultâneas
-- Banco de dados com migrações incompatíveis
-- Recursos compartilhados não suportam lock (filesystem)
-- Ambientes de desenvolvimento/teste
-
-**Evitar em produção devido a**:
-- Downtime completo
-- Experiência de usuário degradada
-- Sem capacidade de rollback gradual
-
-### 6.3. Blue-Green Deployment
-
-Duas versões completas rodando simultaneamente, switch instantâneo de tráfego.
-
-#### Arquitetura
-
-```text
-Service → Label Selector: version=blue
-
-Deployment Blue (version=blue)  ← Tráfego atual
-  └─ 10 Pods v1.0
-
-Deployment Green (version=green) ← Nova versão em standby
-  └─ 10 Pods v2.0
-```
-
-#### Implementação
-
-**Deployment Blue** (versão atual):
+Rolling Update é estratégia padrão que substitui Pods antigos por novos gradualmente, mantendo disponibilidade durante processo.
 
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp-blue
+  name: nestjs-app
 spec:
   replicas: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 3        # Máximo de 3 Pods adicionais durante update
+      maxUnavailable: 2  # Máximo de 2 Pods indisponíveis durante update
+  template:
+    # ... spec do Pod
+```
+
+#### 5.1.1. Parâmetros de Rolling Update
+
+**maxSurge**: Número máximo de Pods que podem ser criados além de `replicas` durante update. Pode ser número absoluto ou percentual.
+
+```yaml
+maxSurge: 3      # 3 Pods adicionais
+maxSurge: 25%    # 25% de répl
+```
+
+Com `replicas: 10` e `maxSurge: 3`, pode haver até 13 Pods durante update.
+
+**maxUnavailable**: Número máximo de Pods que podem estar indisponíveis durante update.
+
+```yaml
+maxUnavailable: 2    # 2 Pods podem estar down
+maxUnavailable: 10%  # 10% das réplicas podem estar down
+```
+
+Com `replicas: 10` e `maxUnavailable: 2`, pelo menos 8 Pods devem estar disponíveis.
+
+#### 5.1.2. Configurações para Zero Downtime
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1           # Criar 1 novo antes de terminar antigo
+    maxUnavailable: 0     # Zero downtime garantido
+```
+
+#### 5.1.3. Configurações para Update Rápido
+
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 50%         # Criar muitos Pods novos rapidamente
+    maxUnavailable: 25%   # Pode ter mais indisponibilidade
+```
+
+### 5.2. Recreate Strategy
+
+Estratégia Recreate termina todos os Pods antigos antes de criar novos, causando downtime completo mas garantindo que apenas uma versão execute por vez.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: database-migration-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  template:
+    # ... spec do Pod
+```
+
+#### 5.2.1. Casos de Uso para Recreate
+
+- Aplicações que não suportam múltiplas versões simultaneamente
+- Migrações de schema de banco de dados incompatíveis
+- Aplicações stateful que requerem shutdown limpo
+- Desenvolvimento e staging onde downtime é aceitável
+
+### 5.3. Estratégias Avançadas (Não Nativas)
+
+#### 5.3.1. Blue-Green Deployment
+
+Mantém dois ambientes idênticos (Blue = produção atual, Green = nova versão). Traffic é switchado instantaneamente de Blue para Green após validação.
+
+```yaml
+# Deployment Blue (versão antiga)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-blue
+spec:
+  replicas: 3
   selector:
     matchLabels:
       app: myapp
@@ -992,19 +568,17 @@ spec:
         version: blue
     spec:
       containers:
-      - name: myapp
-        image: myapp:1.0.0
-```
+      - name: app
+        image: myapp:v1.0.0
 
-**Deployment Green** (nova versão):
-
-```yaml
+---
+# Deployment Green (nova versão)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp-green
+  name: app-green
 spec:
-  replicas: 10
+  replicas: 3
   selector:
     matchLabels:
       app: myapp
@@ -1016,697 +590,730 @@ spec:
         version: green
     spec:
       containers:
-      - name: myapp
-        image: myapp:2.0.0
-```
+      - name: app
+        image: myapp:v2.0.0
 
-**Service** (aponta para Blue):
-
-```yaml
+---
+# Service inicialmente apontando para Blue
 apiVersion: v1
 kind: Service
 metadata:
-  name: myapp-service
+  name: app-service
 spec:
   selector:
     app: myapp
-    version: blue  # Tráfego para Blue
+    version: blue  # Switch para 'green' para mudar versão
   ports:
   - port: 80
-    targetPort: 3000
+    targetPort: 8080
 ```
 
-#### Processo de Deploy
+#### 5.3.2. Canary Deployment
 
-1. Deploy versão Green (nova)
-2. Teste versão Green (smoke tests, health checks)
-3. Switch Service para Green: `kubectl patch service myapp-service -p '{"spec":{"selector":{"version":"green"}}}'`
-4. Monitorar versão Green em produção
-5. Se OK: Deletar Blue
-6. Se problema: Rollback instantâneo para Blue
-
-#### Vantagens
-
-- **Zero downtime**: Switch instantâneo
-- **Rollback imediato**: Reverter selector
-- **Teste em produção**: Green pode ser testado antes de receber tráfego
-- **Segurança**: Versão anterior pronta para rollback
-
-#### Desvantagens
-
-- **Custo**: Dobro de recursos temporariamente
-- **Complexidade**: Gerenciar dois Deployments
-- **Banco de dados**: Migrações podem ser desafiadoras
-
-### 6.4. Canary Deployment
-
-Release gradual para subset de usuários.
-
-#### Arquitetura
-
-```text
-Service → Seleciona app=myapp (sem version)
-
-Deployment Stable (version=stable)
-  └─ 9 Pods v1.0 (90% tráfego)
-
-Deployment Canary (version=canary)
-  └─ 1 Pod v2.0 (10% tráfego)
-```
-
-#### Implementação
-
-**Deployment Stable**:
+Libera nova versão gradualmente para subconjunto de usuários, permitindo validação em produção com impacto limitado.
 
 ```yaml
+# Deployment principal (versão estável) - 90% do tráfego
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp-stable
+  name: app-stable
 spec:
   replicas: 9
   selector:
     matchLabels:
       app: myapp
-      version: stable
+      track: stable
   template:
     metadata:
       labels:
         app: myapp
-        version: stable
+        track: stable
     spec:
       containers:
-      - name: myapp
-        image: myapp:1.0.0
-```
+      - name: app
+        image: myapp:v1.0.0
 
-**Deployment Canary**:
-
-```yaml
+---
+# Deployment canary (nova versão) - 10% do tráfego
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp-canary
+  name: app-canary
 spec:
-  replicas: 1  # 10% do tráfego (1 de 10 pods)
+  replicas: 1
   selector:
     matchLabels:
       app: myapp
-      version: canary
+      track: canary
   template:
     metadata:
       labels:
         app: myapp
-        version: canary
+        track: canary
     spec:
       containers:
-      - name: myapp
-        image: myapp:2.0.0
-```
+      - name: app
+        image: myapp:v2.0.0
 
-**Service** (balanceia entre todos):
-
-```yaml
+---
+# Service balanceia entre stable e canary
 apiVersion: v1
 kind: Service
 metadata:
-  name: myapp-service
+  name: app-service
 spec:
   selector:
-    app: myapp  # Seleciona AMBOS stable e canary
+    app: myapp  # Seleciona ambos stable e canary
   ports:
   - port: 80
-    targetPort: 3000
+    targetPort: 8080
 ```
 
-#### Progressão Gradual
-
-1. **10%**: 1 Canary, 9 Stable
-2. **Monitorar**: Métricas, erros, latência
-3. **25%**: 3 Canary, 7 Stable
-4. **50%**: 5 Canary, 5 Stable
-5. **75%**: 7 Canary, 3 Stable
-6. **100%**: 10 Canary, 0 Stable → Renomear Canary para Stable
-
-#### Ferramentas Avançadas
-
-**Flagger** (Progressive Delivery):
-
-```yaml
-apiVersion: flagger.app/v1beta1
-kind: Canary
-metadata:
-  name: myapp
-spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: myapp
-  service:
-    port: 80
-  analysis:
-    interval: 1m
-    threshold: 5
-    maxWeight: 50
-    stepWeight: 10
-    metrics:
-    - name: request-success-rate
-      threshold: 99
-      interval: 1m
-```
-
-Flagger automatiza progressão baseada em métricas.
-
-#### Vantagens
-
-- **Redução de risco**: Exposição gradual
-- **Detecção precoce**: Problemas afetam poucos usuários
-- **Rollback fácil**: Apenas escalar Canary para 0
-- **A/B testing**: Comparar versões em produção
-
-#### Desvantagens
-
-- **Complexidade**: Múltiplos Deployments
-- **Monitoramento**: Necessário para decisões
-- **Duração**: Deploy completo leva mais tempo
-
-### 6.5. Comparação de Estratégias
-
-| Estratégia | Downtime | Complexidade | Custo | Rollback | Caso de Uso |
-|------------|----------|--------------|-------|----------|-------------|
-| RollingUpdate | Zero | Baixa | Normal | Gradual | Padrão, maioria apps |
-| Recreate | Sim | Baixa | Normal | Rebuild | Dev, apps incompatíveis |
-| Blue-Green | Zero | Média | 2x | Instantâneo | Lançamentos críticos |
-| Canary | Zero | Alta | 1.1-1.5x | Gradual | Alta criticidade, A/B |
-
-## 7. Rollback e Histórico
-
-### 7.1. Histórico de Rollout
-
-Kubernetes mantém histórico de revisões:
+### 5.4. Rollback de Deployments
 
 ```bash
-kubectl rollout history deployment/myapp
+# Ver histórico de rollouts
+kubectl rollout history deployment/nestjs-app -n production
+
+# Ver detalhes de revisão específica
+kubectl rollout history deployment/nestjs-app -n production --revision=2
+
+# Fazer rollback para revisão anterior
+kubectl rollout undo deployment/nestjs-app -n production
+
+# Fazer rollback para revisão específica
+kubectl rollout undo deployment/nestjs-app -n production --to-revision=3
+
+# Verificar status do rollout
+kubectl rollout status deployment/nestjs-app -n production
+
+# Pausar rollout (para fazer múltiplas mudanças)
+kubectl rollout pause deployment/nestjs-app -n production
+
+# Retomar rollout pausado
+kubectl rollout resume deployment/nestjs-app -n production
+
+# Restart deployment (recria todos os Pods)
+kubectl rollout restart deployment/nestjs-app -n production
 ```
 
-Output:
-```text
-REVISION  CHANGE-CAUSE
-1         Initial deployment
-2         Update image to v1.1.0
-3         Update image to v1.2.0
-```
-
-#### Anotações para Change-Cause
-
-```bash
-# Deployment com anotação
-kubectl apply -f deployment.yaml --record
-```
-
-Ou no manifesto:
-
-```yaml
-metadata:
-  annotations:
-    kubernetes.io/change-cause: "Deploy version 1.2.0 with new feature X"
-```
-
-### 7.2. Inspeção de Revisão
-
-```bash
-# Ver detalhes da revisão 2
-kubectl rollout history deployment/myapp --revision=2
-```
-
-Output mostra template do Pod naquela revisão.
-
-### 7.3. Rollback
-
-#### Rollback para Revisão Anterior
-
-```bash
-kubectl rollout undo deployment/myapp
-```
-
-Kubernetes reverte para revisão imediatamente anterior.
-
-#### Rollback para Revisão Específica
-
-```bash
-kubectl rollout undo deployment/myapp --to-revision=2
-```
-
-Reverte para revisão 2 especificamente.
-
-#### Processo de Rollback
-
-1. Kubernetes identifica ReplicaSet da revisão target
-2. Inicia rolling update reverso
-3. Escala ReplicaSet antigo (da revisão) para cima
-4. Escala ReplicaSet atual para baixo
-5. Cria nova revisão do rollback no histórico
-
-### 7.4. Pausar e Retomar Rollout
-
-```bash
-# Pausar rollout em andamento
-kubectl rollout pause deployment/myapp
-
-# Fazer múltiplas mudanças
-kubectl set image deployment/myapp app=myapp:2.0.0
-kubectl set resources deployment/myapp -c=app --limits=cpu=500m,memory=512Mi
-
-# Retomar rollout (aplica todas mudanças de uma vez)
-kubectl rollout resume deployment/myapp
-```
-
-**Uso**: Agrupar múltiplas mudanças em único rollout
-
-### 7.5. Limite de Histórico
+### 5.5. Controle de Histórico de Revisões
 
 ```yaml
 spec:
-  revisionHistoryLimit: 10  # Mantém 10 ReplicaSets antigas
+  revisionHistoryLimit: 10  # Manter 10 ReplicaSets antigos para rollback
 ```
 
-**Default**: 10
+Por padrão, Kubernetes mantém 10 ReplicaSets antigos. Reduzir este número economiza recursos mas limita histórico de rollback disponível.
 
-**Ajustar baseado em**:
-- Frequência de deploys
-- Necessidade de rollback profundo
-- Consumo de disco (etcd)
+## 6. ConfigMaps: Gestão de Configurações
 
-## 8. Gestão de Configuração em Múltiplos Ambientes
+### 6.1. Conceito e Propósito
 
-### 8.1. Estratégias de Organização
+ConfigMaps permitem desacoplar configuração de images de containers, tornando aplicações mais portáveis e facilitando gestão de configurações específicas de ambiente. Mesma image pode executar em desenvolvimento, staging e produção com diferentes ConfigMaps.
 
-#### Por Namespace
+### 6.2. Criação de ConfigMaps
+
+#### 6.2.1. A Partir de Literals
 
 ```bash
-# ConfigMaps por ambiente
-kubectl apply -f configmap.yaml -n development
-kubectl apply -f configmap.yaml -n staging
-kubectl apply -f configmap.yaml -n production
+kubectl create configmap app-config \
+  --from-literal=APP_NAME="NestJS Application" \
+  --from-literal=APP_ENV="production" \
+  --from-literal=LOG_LEVEL="info" \
+  -n production
 ```
 
-Mesmo nome, namespaces diferentes, valores diferentes.
+#### 6.2.2. A Partir de Arquivo
 
-#### Por Nome de Recurso
+```bash
+# Criar arquivo de configuração
+cat > app.properties << EOF
+APP_NAME=NestJS Application
+APP_ENV=production
+LOG_LEVEL=info
+DATABASE_HOST=postgres.production.svc.cluster.local
+DATABASE_PORT=5432
+EOF
+
+# Criar ConfigMap a partir de arquivo
+kubectl create configmap app-config \
+  --from-file=app.properties \
+  -n production
+```
+
+#### 6.2.3. A Partir de Diretório
+
+```bash
+# Criar ConfigMap de todos os arquivos em diretório
+kubectl create configmap app-config \
+  --from-file=./config/ \
+  -n production
+```
+
+#### 6.2.4. Declarativamente via YAML
 
 ```yaml
-# development
-name: app-config-dev
-
-# production
-name: app-config-prod
-```
-
-Deployment referencia apropriado:
-
-```yaml
-envFrom:
-- configMapRef:
-    name: app-config-${ENV}  # Substituído por CI/CD
-```
-
-### 8.2. Kustomize
-
-Ferramenta nativa para customização de manifestos Kubernetes.
-
-#### Estrutura
-
-```text
-base/
-  deployment.yaml
-  service.yaml
-  kustomization.yaml
-overlays/
-  development/
-    kustomization.yaml
-    configmap.yaml
-  production/
-    kustomization.yaml
-    configmap.yaml
-    replicas-patch.yaml
-```
-
-#### Base
-
-`base/deployment.yaml`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
+# configmap.yaml
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: myapp
-spec:
-  replicas: 1
-  template:
-    spec:
-      containers:
-      - name: app
-        image: myapp:latest
+  name: app-config
+  namespace: production
+  labels:
+    app: nestjs-app
+data:
+  APP_NAME: "NestJS Application"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  DATABASE_HOST: "postgres.production.svc.cluster.local"
+  DATABASE_PORT: "5432"
+  # Configurações multi-linha
+  application.yaml: |
+    server:
+      port: 3000
+      host: 0.0.0.0
+    logging:
+      level: info
+      format: json
 ```
-
-`base/kustomization.yaml`:
-
-```yaml
-resources:
-- deployment.yaml
-- service.yaml
-```
-
-#### Overlay de Produção
-
-`overlays/production/kustomization.yaml`:
-
-```yaml
-bases:
-- ../../base
-
-configMapGenerator:
-- name: app-config
-  literals:
-  - APP_ENV=production
-  - LOG_LEVEL=warn
-
-patchesStrategicMerge:
-- replicas-patch.yaml
-
-images:
-- name: myapp
-  newTag: 1.2.0
-```
-
-`overlays/production/replicas-patch.yaml`:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: myapp
-spec:
-  replicas: 10
-```
-
-#### Build e Deploy
 
 ```bash
-# Gerar manifestos finais
-kustomize build overlays/production
-
-# Aplicar diretamente
-kubectl apply -k overlays/production
+kubectl apply -f configmap.yaml
 ```
 
-### 8.3. Helm
+### 6.3. Consumindo ConfigMaps em Pods
 
-Gerenciador de pacotes Kubernetes.
-
-#### Chart Structure
-
-```text
-myapp/
-  Chart.yaml
-  values.yaml
-  values-dev.yaml
-  values-prod.yaml
-  templates/
-    deployment.yaml
-    service.yaml
-    configmap.yaml
-```
-
-#### Template com Variáveis
-
-`templates/deployment.yaml`:
+#### 6.3.1. Como Variáveis de Ambiente Individuais
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .Release.Name }}
 spec:
-  replicas: {{ .Values.replicaCount }}
-  template:
-    spec:
-      containers:
-      - name: app
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        env:
-        - name: APP_ENV
-          value: {{ .Values.environment }}
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    env:
+    - name: APP_NAME
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: APP_NAME
+    - name: APP_ENV
+      valueFrom:
+        configMapKeyRef:
+          name: app-config
+          key: APP_ENV
 ```
 
-#### Values
-
-`values-prod.yaml`:
+#### 6.3.2. Importando Todas as Keys como Variáveis
 
 ```yaml
-replicaCount: 10
-environment: production
-image:
-  repository: myapp
-  tag: "1.2.0"
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    envFrom:
+    - configMapRef:
+        name: app-config
 ```
 
-#### Deploy
+Todas as chaves do ConfigMap tornam-se variáveis de ambiente no container.
 
-```bash
-helm install myapp ./myapp -f values-prod.yaml -n production
+#### 6.3.3. Como Volume Montado
+
+```yaml
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    volumeMounts:
+    - name: config-volume
+      mountPath: /etc/config
+      readOnly: true
+  volumes:
+  - name: config-volume
+    configMap:
+      name: app-config
 ```
 
-## 9. Conclusões
+Cada chave no ConfigMap torna-se arquivo em `/etc/config/`.
 
-### Principais Aprendizados
+#### 6.3.4. Montando Keys Específicas
 
-1. **Containerização Eficiente**:
-   - Multi-stage builds reduzem tamanho de imagens
-   - Imagens menores aceleram deploys e reduzem vulnerabilidades
-   - Uso de usuário não-root aumenta segurança
+```yaml
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    volumeMounts:
+    - name: config-volume
+      mountPath: /etc/config
+  volumes:
+  - name: config-volume
+    configMap:
+      name: app-config
+      items:
+      - key: application.yaml
+        path: app.yaml
+```
 
-2. **Versionamento Imutável**:
-   - Tags específicas (semantic versioning, commit hash) são essenciais
-   - Tag latest cria problemas de rastreabilidade e rollback
-   - ImagePullPolicy deve ser explícito e adequado à tag
-
-3. **Separação de Configuração**:
-   - ConfigMaps para dados não sensíveis
-   - Secrets para credenciais e tokens
-   - envFrom simplifica injeção de múltiplas variáveis
-   - Validação de variáveis previne falhas em runtime
-
-4. **Segurança de Secrets**:
-   - Base64 não é criptografia
-   - Encryption at rest é necessário em produção
-   - Secret managers externos (Vault) oferecem segurança superior
-   - RBAC restritivo protege acessos
-
-5. **Estratégias de Deployment**:
-   - RollingUpdate é padrão e adequado para maioria
-   - Blue-Green oferece rollback instantâneo
-   - Canary reduz risco com exposição gradual
-   - Escolha baseada em criticidade e recursos
-
-6. **Rollback e Recuperação**:
-   - Histórico de revisões permite reversão rápida
-   - Rollback é simples com tags imutáveis
-   - Monitoramento é essencial para detecção de problemas
-   - revisionHistoryLimit balanceia rollback e consumo de recursos
-
-### Melhores Práticas
-
-1. **Sempre use tags específicas e imutáveis** em produção
-2. **ConfigMaps e Secrets versionados** em Git (exceto valores sensíveis)
-3. **Automatize build e push** via CI/CD com tags automáticas
-4. **Documente variáveis esperadas** pela aplicação
-5. **Teste rollbacks** em staging antes de produção
-6. **Monitore métricas** durante e após deployments
-7. **Use ferramentas** (Kustomize, Helm) para multi-ambiente
-8. **Implemente smoke tests** após deployments
-9. **Configure health checks** (liveness, readiness) adequados
-10. **Mantenha imagens atualizadas** para patches de segurança
-
-### Próximos Passos
-
-Os conceitos apresentados preparam para tópicos avançados:
-
-- **Health Checks Avançados**: Startup, liveness, readiness probes
-- **Persistent Volumes**: Armazenamento de dados stateful
-- **Horizontal Pod Autoscaler**: Escalabilidade automática
-- **Ingress Controllers**: Roteamento HTTP/HTTPS avançado
-- **Service Mesh**: Istio, Linkerd para observabilidade
-- **GitOps**: ArgoCD, Flux para deployments declarativos
-- **CI/CD Integration**: Jenkins, GitHub Actions, GitLab CI
-- **Monitoramento**: Prometheus, Grafana, ELK stack
-
-### Recomendações Finais
-
-Para equipes em produção:
-
-1. **Estabeleça pipeline de CI/CD** robusto e automatizado
-2. **Implemente observabilidade** desde o início
-3. **Documente processos** de deployment e rollback
-4. **Realize post-mortems** de incidents para aprendizado
-5. **Treine equipe** em procedimentos de emergência
-6. **Mantenha staging** espelho de produção para testes
-7. **Automatize testes** de integração e smoke tests
-8. **Revise configurações** de segurança periodicamente
-
-## 10. Referências Bibliográficas
-
-### Documentação Oficial
-
-- Kubernetes Documentation. "ConfigMaps". Disponível em: https://kubernetes.io/docs/concepts/configuration/configmap/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Secrets". Disponível em: https://kubernetes.io/docs/concepts/configuration/secret/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Managing Secrets using kubectl". Disponível em: https://kubernetes.io/docs/tasks/configmap-secret/managing-secret-using-kubectl/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Images". Disponível em: https://kubernetes.io/docs/concepts/containers/images/. Acesso em: 2024.
-
-- Kubernetes Documentation. "Deployment Strategies". Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy. Acesso em: 2024.
-
-### Ferramentas
-
-- Docker Documentation. "Best practices for writing Dockerfiles". Disponível em: https://docs.docker.com/develop/develop-images/dockerfile_best-practices/. Acesso em: 2024.
-
-- Kustomize Documentation. Disponível em: https://kustomize.io/. Acesso em: 2024.
-
-- Helm Documentation. Disponível em: https://helm.sh/docs/. Acesso em: 2024.
-
-- HashiCorp Vault Documentation. "Vault Agent with Kubernetes". Disponível em: https://www.vaultproject.io/docs/platform/k8s. Acesso em: 2024.
-
-### Livros
-
-- Burns, Brendan; Beda, Joe; Hightower, Kelsey. "Kubernetes: Up and Running". O'Reilly Media, 2019.
-
-- Luksa, Marko. "Kubernetes in Action". Manning Publications, 2018.
-
-- Hausenblas, Michael; Schimanski, Stefan. "Programming Kubernetes". O'Reilly Media, 2019.
-
-### Artigos
-
-- Kubernetes Blog. "Encrypting Secret Data at Rest". Disponível em: https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/. Acesso em: 2024.
-
-- Kubernetes Blog. "Deployment Strategies". Disponível em: https://kubernetes.io/blog/. Acesso em: 2024.
-
-## 11. Apêndice
-
-### Apêndice A: Comandos Úteis
-
-#### ConfigMaps
+### 6.4. Atualização de ConfigMaps
 
 ```bash
-# Criar
-kubectl create configmap app-config --from-literal=KEY=VALUE
-kubectl create configmap app-config --from-file=app.env
+# Editar ConfigMap existente
+kubectl edit configmap app-config -n production
+
+# Ou atualizar via arquivo
 kubectl apply -f configmap.yaml
 
-# Listar
-kubectl get configmaps
-kubectl get cm
-
-# Visualizar
-kubectl describe configmap app-config
-kubectl get configmap app-config -o yaml
-
-# Editar
-kubectl edit configmap app-config
-
-# Deletar
-kubectl delete configmap app-config
+# Verificar mudanças
+kubectl describe configmap app-config -n production
 ```
 
-#### Secrets
+**Importante**: Mudanças em ConfigMaps não acionam reinicialização automática de Pods. Para aplicar mudanças:
 
 ```bash
-# Criar
-kubectl create secret generic db-creds --from-literal=password=secret
-kubectl create secret docker-registry regcred --docker-server=... --docker-username=... --docker-password=...
-kubectl apply -f secret.yaml
+# Método 1: Restart deployment
+kubectl rollout restart deployment/nestjs-app -n production
 
-# Listar
-kubectl get secrets
-
-# Visualizar (valores em base64)
-kubectl get secret db-creds -o yaml
-
-# Decodificar
-kubectl get secret db-creds -o jsonpath='{.data.password}' | base64 -d
-
-# Deletar
-kubectl delete secret db-creds
+# Método 2: Forçar update adicionando annotation
+kubectl patch deployment nestjs-app -n production \
+  -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"configmap-update\":\"$(date)\"}}}}}"
 ```
 
-#### Deployment e Rollout
+## 7. Secrets: Gestão de Informações Sensíveis
+
+### 7.1. Conceito e Diferenças de ConfigMaps
+
+Secrets são objetos para armazenar informações sensíveis como senhas, tokens OAuth, chaves SSH. Embora similares a ConfigMaps em uso, Secrets têm tratamento especial:
+
+- Valores são base64-encoded (não criptografados por padrão)
+- Podem ser criptografados at-rest se configurado
+- Acesso pode ser restrito via RBAC mais granular
+- Kubernetes evita escrever Secrets em disco quando possível
+
+### 7.2. Tipos de Secrets
+
+- **Opaque** (padrão): Dados arbitrários definidos pelo usuário
+- **kubernetes.io/service-account-token**: Token para ServiceAccount
+- **kubernetes.io/dockercfg**: Credenciais Docker registry (formato antigo)
+- **kubernetes.io/dockerconfigjson**: Credenciais Docker registry (formato novo)
+- **kubernetes.io/basic-auth**: Credenciais para autenticação básica
+- **kubernetes.io/ssh-auth**: Dados para autenticação SSH
+- **kubernetes.io/tls**: Certificado TLS e chave privada
+
+### 7.3. Criação de Secrets
+
+#### 7.3.1. A Partir de Literals
 
 ```bash
-# Aplicar Deployment
-kubectl apply -f deployment.yaml
-
-# Atualizar imagem
-kubectl set image deployment/myapp app=myapp:2.0.0
-
-# Status do rollout
-kubectl rollout status deployment/myapp
-
-# Histórico
-kubectl rollout history deployment/myapp
-
-# Rollback
-kubectl rollout undo deployment/myapp
-kubectl rollout undo deployment/myapp --to-revision=2
-
-# Pausar/Retomar
-kubectl rollout pause deployment/myapp
-kubectl rollout resume deployment/myapp
-
-# Restart (força recreação de Pods)
-kubectl rollout restart deployment/myapp
+kubectl create secret generic database-credentials \
+  --from-literal=username=admin \
+  --from-literal=password='SuperSecret123!' \
+  -n production
 ```
 
-### Apêndice B: Exemplo Completo de Aplicação
+#### 7.3.2. A Partir de Arquivos
 
-#### Dockerfile
+```bash
+# Criar arquivo com senha
+echo -n 'SuperSecret123!' > password.txt
 
-```dockerfile
-FROM node:18-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
+# Criar Secret
+kubectl create secret generic database-credentials \
+  --from-file=password=./password.txt \
+  -n production
 
-FROM node:18-alpine
-WORKDIR /app
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY package*.json ./
-EXPOSE 3000
-USER node
-CMD ["node", "dist/main.js"]
+# Limpar arquivo local
+rm password.txt
 ```
 
-#### ConfigMap
+#### 7.3.3. Declarativamente via YAML
 
 ```yaml
+# secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-credentials
+  namespace: production
+type: Opaque
+data:
+  # Valores devem ser base64-encoded
+  username: YWRtaW4=  # 'admin' em base64
+  password: U3VwZXJTZWNyZXQxMjMh  # 'SuperSecret123!' em base64
+```
+
+```bash
+# Encodar valores
+echo -n 'admin' | base64
+echo -n 'SuperSecret123!' | base64
+
+# Aplicar Secret
+kubectl apply -f secret.yaml
+```
+
+#### 7.3.4. Usando stringData (Mais Legível)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-credentials
+  namespace: production
+type: Opaque
+stringData:
+  # stringData aceita valores em texto plano
+  # Kubernetes converte automaticamente para base64
+  username: admin
+  password: SuperSecret123!
+```
+
+### 7.4. Consumindo Secrets em Pods
+
+#### 7.4.1. Como Variáveis de Ambiente
+
+```yaml
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    env:
+    - name: DATABASE_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: database-credentials
+          key: username
+    - name: DATABASE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: database-credentials
+          key: password
+```
+
+#### 7.4.2. Importando Todas as Keys
+
+```yaml
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    envFrom:
+    - secretRef:
+        name: database-credentials
+```
+
+#### 7.4.3. Como Volume Montado
+
+```yaml
+spec:
+  containers:
+  - name: app
+    image: myapp:v1.0.0
+    volumeMounts:
+    - name: secret-volume
+      mountPath: /etc/secrets
+      readOnly: true
+  volumes:
+  - name: secret-volume
+    secret:
+      secretName: database-credentials
+      defaultMode: 0400  # Permissões read-only para owner
+```
+
+### 7.5. Exemplo Completo com Aplicação NestJS
+
+```yaml
+# deployment-with-secrets.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nestjs-app
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nestjs-app
+  template:
+    metadata:
+      labels:
+        app: nestjs-app
+    spec:
+      containers:
+      - name: app
+        image: myusername/nestjs-app:v1.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        # Variáveis de ConfigMap
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: APP_NAME
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: LOG_LEVEL
+        # Variáveis de Secret
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: DATABASE_HOST
+        - name: DATABASE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: username
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: password
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: jwt-secret
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: api-key
+```
+
+### 7.6. Gestão Avançada de Secrets
+
+#### 7.6.1. Secrets Externos com Vault
+
+HashiCorp Vault oferece gestão centralizada de secrets com criptografia, rotação automática e auditoria.
+
+```yaml
+# Usando Vault Agent Injector
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-with-vault
+spec:
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "myapp"
+        vault.hashicorp.com/agent-inject-secret-database: "secret/data/database"
+        vault.hashicorp.com/agent-inject-template-database: |
+          {{- with secret "secret/data/database" -}}
+          export DATABASE_USERNAME="{{ .Data.data.username }}"
+          export DATABASE_PASSWORD="{{ .Data.data.password }}"
+          {{- end }}
+    spec:
+      # Container spec...
+```
+
+#### 7.6.2. Sealed Secrets
+
+Sealed Secrets permite armazenar secrets criptografados em Git.
+
+```bash
+# Instalar kubeseal
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.18.0/controller.yaml
+
+# Criar secret regular
+kubectl create secret generic mysecret \
+  --from-literal=password=SuperSecret123! \
+  --dry-run=client -o yaml > mysecret.yaml
+
+# Selar secret
+kubeseal -f mysecret.yaml -w mysealedsecret.yaml
+
+# mysealedsecret.yaml pode ser commitado no Git
+# Controller no cluster descriptografa automaticamente
+kubectl apply -f mysealedsecret.yaml
+```
+
+### 7.7. Boas Práticas com Secrets
+
+1. **Nunca committar Secrets em Git**: Usar `.gitignore`
+2. **Usar RBAC para limitar acesso**: Apenas ServiceAccounts necessárias devem ter acesso
+3. **Habilitar encryption at-rest**: Configurar no API Server
+4. **Rotacionar secrets regularmente**: Implementar processo de rotação
+5. **Usar soluções externas para produção**: Vault, AWS Secrets Manager, etc.
+6. **Auditar acesso a secrets**: Logs e monitoring
+7. **Limitar escopo**: Secrets por namespace, não cluster-wide
+
+```yaml
+# Exemplo de RBAC para limitar acesso a Secrets
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-reader
+  namespace: production
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["database-credentials"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-database-credentials
+  namespace: production
+subjects:
+- kind: ServiceAccount
+  name: app-service-account
+roleRef:
+  kind: Role
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io
+```
+
+## 8. Conclusões
+
+A jornada de implantação de aplicações reais no Kubernetes transcende simplesmente "fazer funcionar" para abranger práticas sustentáveis de operação, manutenção e evolução de sistemas em produção. A containerização apropriada através de Dockerfiles otimizados estabelece fundação para deployments eficientes, onde tamanho de images, estratégias de caching de layers e separação de stages de build e runtime impactam diretamente velocidade de deployments e utilização de recursos em clusters.
+
+A gestão disciplinada de tags de images emerge como prática crítica que diferencia ambientes casuais de operações profissionais de produção. Tags imutáveis baseadas em semantic versioning ou commit hashes proporcionam rastreabilidade exata, rollbacks previsíveis e eliminam classes inteiras de problemas relacionados a indeterminismo e inconsistência entre ambientes. O abandono de práticas convenientes mas problemáticas como uso de tag `latest` em produção representa maturidade operacional necessária para sistemas confiáveis.
+
+Estratégias de deployment no Kubernetes oferecem controle granular sobre como novas versões substituem antigas, equilibrando disponibilidade, velocidade e consumo de recursos. Rolling updates com configurações apropriadas de `maxSurge` e `maxUnavailable` permitem zero-downtime deployments para aplicações stateless, enquanto estratégia Recreate, apesar de causar indisponibilidade temporária, pode ser necessária para aplicações com requisitos específicos de consistência ou migrações de estado. Estratégias avançadas como blue-green e canary deployments, embora não nativas do Kubernetes, podem ser implementadas através de manipulação cuidadosa de labels, selectors e Services, oferecendo capacidades adicionais para validação progressiva de releases em produção.
+
+A externalização de configuração através de ConfigMaps e Secrets representa princípio fundamental de aplicações cloud-native que facilita portabilidade, simplifica gestão de configurações específicas de ambiente, e melhora segurança através de separação de dados sensíveis de código. A capacidade de consumir configurações através de variáveis de ambiente, montagem de volumes, ou importação completa de ConfigMaps/Secrets oferece flexibilidade para diferentes padrões de aplicação e requisitos operacionais. Para ambientes de produção, integração com soluções especializadas de gestão de secrets como HashiCorp Vault ou AWS Secrets Manager proporciona capacidades adicionais de criptografia, rotação automática, auditoria e controle de acesso que excedem capacidades nativas de Secrets do Kubernetes, estabelecendo fundações para operações seguras e compliant em escala empresarial.
+
+## 9. Referências Bibliográficas
+
+### 9.1. Documentação Oficial do Kubernetes
+
+- Kubernetes Documentation. "Deployments". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+
+- Kubernetes Documentation. "ConfigMaps". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/configuration/configmap/
+
+- Kubernetes Documentation. "Secrets". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/configuration/secret/
+
+- Kubernetes Documentation. "Images". Kubernetes.io. Disponível em: https://kubernetes.io/docs/concepts/containers/images/
+
+### 9.2. Docker e Containerização
+
+- Docker Documentation. "Dockerfile Best Practices". Docker.com. Disponível em: https://docs.docker.com/develop/dev-best-practices/
+
+- Docker Documentation. "Multi-stage Builds". Docker.com. Disponível em: https://docs.docker.com/develop/develop-images/multistage-build/
+
+### 9.3. NestJS
+
+- NestJS Documentation. "NestJS Official Documentation". NestJS.com. Disponível em: https://docs.nestjs.com/
+
+### 9.4. Gestão de Secrets
+
+- HashiCorp Vault Documentation. "Vault on Kubernetes". Vaultproject.io. Disponível em: https://www.vaultproject.io/docs/platform/k8s
+
+- Bitnami Sealed Secrets. "Sealed Secrets". GitHub. Disponível em: https://github.com/bitnami-labs/sealed-secrets
+
+### 9.5. Estratégias de Deployment
+
+- Kubernetes Blog. "Deployment Strategies". Kubernetes.io/blog. Disponível em: https://kubernetes.io/blog/
+
+- Martin Fowler. "Blue-Green Deployment". MartinFowler.com. Disponível em: https://martinfowler.com/bliki/BlueGreenDeployment.html
+
+## 10. Apêndices
+
+### Apêndice A: Exemplo Completo de Aplicação NestJS
+
+```typescript
+// src/config/configuration.ts
+export default () => ({
+  port: parseInt(process.env.PORT, 10) || 3000,
+  app: {
+    name: process.env.APP_NAME || 'NestJS App',
+    environment: process.env.APP_ENV || 'development',
+  },
+  database: {
+    host: process.env.DATABASE_HOST || 'localhost',
+    port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
+    username: process.env.DATABASE_USERNAME,
+    password: process.env.DATABASE_PASSWORD,
+    database: process.env.DATABASE_NAME || 'appdb',
+  },
+  jwt: {
+    secret: process.env.JWT_SECRET,
+    expiresIn: process.env.JWT_EXPIRES_IN || '1d',
+  },
+  external: {
+    apiKey: process.env.API_KEY,
+    apiUrl: process.env.API_URL,
+  },
+});
+
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import configuration from './config/configuration';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [configuration],
+    }),
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+
+// src/main.ts
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { ConfigService } from '@nestjs/config';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
+  
+  const port = configService.get('port');
+  const appName = configService.get('app.name');
+  
+  await app.listen(port);
+  console.log(`${appName} is running on: http://localhost:${port}`);
+}
+
+bootstrap();
+```
+
+### Apêndice B: Manifests Kubernetes Completos
+
+```yaml
+# namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: production
+  labels:
+    name: production
+    environment: production
+
+---
+# configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: app-config
   namespace: production
 data:
-  APP_NAME: "MyApplication"
+  APP_NAME: "NestJS Production App"
   APP_ENV: "production"
   LOG_LEVEL: "info"
-  PORT: "3000"
-```
+  DATABASE_HOST: "postgres.production.svc.cluster.local"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "appdb"
+  JWT_EXPIRES_IN: "7d"
+  API_URL: "https://api.external.com"
 
-#### Secret
-
-```yaml
+---
+# secret.yaml
 apiVersion: v1
 kind: Secret
 metadata:
@@ -1714,38 +1321,45 @@ metadata:
   namespace: production
 type: Opaque
 stringData:
-  DATABASE_URL: "postgresql://user:pass@postgres:5432/mydb"
-  API_KEY: "sk_live_abc123def456"
-  JWT_SECRET: "supersecret123"
-```
+  DATABASE_USERNAME: "appuser"
+  DATABASE_PASSWORD: "SuperSecretPassword123!"
+  JWT_SECRET: "your-super-secret-jwt-key-change-in-production"
+  API_KEY: "your-external-api-key"
 
-#### Deployment
-
-```yaml
+---
+# deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: myapp
+  name: nestjs-app
   namespace: production
   labels:
-    app: myapp
+    app: nestjs-app
+    version: v1.0.0
 spec:
-  replicas: 5
+  replicas: 3
+  revisionHistoryLimit: 10
   selector:
     matchLabels:
-      app: myapp
+      app: nestjs-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
-        app: myapp
-        version: "1.2.0"
+        app: nestjs-app
+        version: v1.0.0
     spec:
       containers:
-      - name: app
-        image: myregistry/myapp:1.2.0
+      - name: nestjs-app
+        image: myusername/nestjs-app:v1.0.0
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
+          name: http
           protocol: TCP
         envFrom:
         - configMapRef:
@@ -1754,101 +1368,139 @@ spec:
             name: app-secrets
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "250m"
+            cpu: 100m
+            memory: 256Mi
           limits:
-            memory: "256Mi"
-            cpu: "500m"
+            cpu: 500m
+            memory: 512Mi
         livenessProbe:
           httpGet:
             path: /health
             port: 3000
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /ready
+            path: /health
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  minReadySeconds: 10
-  revisionHistoryLimit: 10
-```
+          timeoutSeconds: 3
+          failureThreshold: 3
+      terminationGracePeriodSeconds: 30
 
-#### Service
-
-```yaml
+---
+# service.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: myapp-service
+  name: nestjs-app-service
   namespace: production
+  labels:
+    app: nestjs-app
 spec:
   type: ClusterIP
   selector:
-    app: myapp
+    app: nestjs-app
   ports:
-  - name: http
-    protocol: TCP
-    port: 80
+  - port: 80
     targetPort: 3000
+    protocol: TCP
+    name: http
 ```
 
-### Apêndice C: Glossário e Termos Técnicos
+### Apêndice C: Scripts de Deploy
 
-**Base64**: Esquema de encoding que representa dados binários em formato ASCII. NÃO é criptografia.
+```bash
+#!/bin/bash
+# deploy.sh - Script automatizado de deploy
 
-**Blue-Green Deployment**: Estratégia com duas versões completas (blue e green), switch instantâneo de tráfego.
+set -e
 
-**Canary Deployment**: Release gradual para subconjunto de usuários, permitindo validação antes de rollout completo.
+# Configurações
+IMAGE_NAME="myusername/nestjs-app"
+NAMESPACE="production"
+VERSION="${1:-v1.0.0}"
 
-**Change-Cause**: Anotação que documenta razão de mudança em revisão de Deployment.
+echo "=== Deploying $IMAGE_NAME:$VERSION to $NAMESPACE ==="
 
-**ConfigMap**: Objeto Kubernetes para armazenar dados de configuração não sensíveis em pares chave-valor.
+# Build image
+echo "Building Docker image..."
+docker build -t $IMAGE_NAME:$VERSION .
 
-**Container Registry**: Repositório para armazenar e distribuir imagens Docker.
+# Push to registry
+echo "Pushing image to registry..."
+docker push $IMAGE_NAME:$VERSION
 
-**Dockerfile**: Arquivo de texto com instruções para construir imagem Docker.
+# Update deployment
+echo "Updating Kubernetes deployment..."
+kubectl set image deployment/nestjs-app \
+  nestjs-app=$IMAGE_NAME:$VERSION \
+  -n $NAMESPACE
 
-**Encryption at Rest**: Criptografia de dados armazenados em disco (etcd).
+# Wait for rollout
+echo "Waiting for rollout to complete..."
+kubectl rollout status deployment/nestjs-app -n $NAMESPACE
 
-**envFrom**: Campo que injeta todas chaves de ConfigMap/Secret como variáveis de ambiente.
+# Verify deployment
+echo "Verifying deployment..."
+kubectl get pods -n $NAMESPACE -l app=nestjs-app
 
-**ImagePullPolicy**: Política que define quando Kubernetes deve puxar imagem do registry.
+echo "=== Deploy completed successfully ==="
+```
 
-**ImagePullSecret**: Secret contendo credenciais para pull de imagens de registry privado.
+### Apêndice D: Glossário e Termos Técnicos
 
-**Immutable**: Recurso que não pode ser modificado após criação, apenas substituído.
+**Base64**: Esquema de encoding que representa dados binários em formato ASCII string, usado para encodar valores em Secrets do Kubernetes.
 
-**Kustomize**: Ferramenta nativa do Kubernetes para customização de manifestos sem templates.
+**Blue-Green Deployment**: Estratégia que mantém dois ambientes idênticos onde tráfego é switchado instantaneamente entre versões.
 
-**Multi-stage Build**: Técnica Dockerfile com múltiplos estágios FROM, resultando em imagem final menor.
+**Canary Deployment**: Estratégia que libera nova versão gradualmente para subconjunto de usuários antes de rollout completo.
 
-**Opaque Secret**: Tipo genérico de Secret para dados arbitrários.
+**ConfigMap**: Objeto do Kubernetes para armazenar dados de configuração não-confidenciais em pares chave-valor.
 
-**Recreate**: Estratégia de deployment que deleta todos Pods antes de criar novos.
+**Container Registry**: Repositório para armazenar e distribuir container images (Docker Hub, ECR, GCR, ACR).
 
-**Registry Credentials**: Autenticação para acessar container registry privado.
+**Dockerfile**: Arquivo de texto contendo instruções para construir container image.
 
-**Revision**: Versão específica na história de rollout de Deployment.
+**envFrom**: Campo de especificação de Pod que importa todas as chaves de ConfigMap ou Secret como variáveis de ambiente.
 
-**revisionHistoryLimit**: Número de ReplicaSets antigas mantidas para rollback.
+**Image Pull Policy**: Política que determina quando kubelet deve pullar container image do registry (Always, IfNotPresent, Never).
 
-**Rollback**: Reversão para versão anterior de Deployment.
+**Immutable Tag**: Tag de container image que não muda ao longo do tempo, garantindo rastreabilidade e rollbacks previsíveis.
 
-**Rolling Update**: Estratégia de atualização gradual mantendo disponibilidade.
+**maxSurge**: Parâmetro de rolling update que especifica número máximo de Pods adicionais que podem ser criados durante atualização.
 
-**Secret**: Objeto Kubernetes para armazenar dados sensíveis (senhas, tokens) em base64.
+**maxUnavailable**: Parâmetro de rolling update que especifica número máximo de Pods que podem estar indisponíveis durante atualização.
 
-**Semantic Versioning**: Esquema de versionamento MAJOR.MINOR.PATCH.
+**Multi-stage Build**: Técnica de Dockerfile que usa múltiplos stages FROM para otimizar tamanho final de image.
 
-**stringData**: Campo de Secret que aceita texto plano, convertido para base64 automaticamente.
+**Mutable Tag**: Tag de container image que pode apontar para diferentes images ao longo do tempo (exemplo: `latest`).
 
-**Vault**: HashiCorp Vault, ferramenta de gerenciamento de secrets com criptografia e controle de acesso.
+**NestJS**: Framework Node.js progressivo para construir aplicações server-side eficientes e escaláveis.
 
-**Zero Downtime**: Deploy sem interrupção de serviço para usuários.
+**Opaque Secret**: Tipo padrão de Secret para dados arbitrários definidos pelo usuário.
+
+**Recreate**: Estratégia de deployment que termina todos os Pods antigos antes de criar novos, causando downtime.
+
+**Registry**: Serviço para armazenar e distribuir container images, como Docker Hub, ECR, GCR ou ACR.
+
+**Revision History**: Histórico de ReplicaSets antigos mantidos para possibilitar rollback de Deployments.
+
+**Rollback**: Processo de reverter Deployment para versão anterior após problemas detectados.
+
+**Rolling Update**: Estratégia padrão de deployment que substitui Pods antigos por novos gradualmente, mantendo disponibilidade.
+
+**Sealed Secrets**: Solução que permite armazenar secrets criptografados em sistemas de controle de versão.
+
+**Secret**: Objeto do Kubernetes para armazenar informações sensíveis como senhas, tokens e chaves.
+
+**Semantic Versioning**: Sistema de versionamento usando formato MAJOR.MINOR.PATCH (exemplo: v1.2.3).
+
+**stringData**: Campo de Secret que aceita valores em texto plano, convertidos automaticamente para base64.
+
+**Vault**: Solução da HashiCorp para gestão centralizada de secrets com criptografia e rotação automática.
+
+**Zero Downtime Deployment**: Estratégia de atualização que mantém aplicação disponível durante todo processo de deployment.
